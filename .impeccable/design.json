@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-21T00:00:00+08:00",
+  "title": "Design System: 求职雷达（job-radar）",
+  "extensions": {
+    "colorMeta": {
+      "primary":       { "role": "primary", "displayName": "飞书蓝", "dark": "#4c84ff", "tonalRamp": ["#0b1f52", "#13317d", "#1d45ab", "#245bdb", "#3370ff", "#6b9aff", "#adc6ff", "#eef3ff"] },
+      "primary-hover": { "role": "primary", "displayName": "深一档蓝", "dark": "#6b9aff", "tonalRamp": ["#0b1f52", "#13317d", "#1d45ab", "#245bdb", "#3370ff", "#6b9aff", "#adc6ff", "#eef3ff"] },
+      "primary-soft":  { "role": "primary", "displayName": "浅蓝底", "dark": "#1f2b45", "tonalRamp": ["#0b1f52", "#13317d", "#1d45ab", "#245bdb", "#3370ff", "#6b9aff", "#adc6ff", "#eef3ff"] },
+      "primary-text":  { "role": "primary", "displayName": "蓝色文字", "dark": "#84a9ff", "tonalRamp": ["#0b1f52", "#13317d", "#1d45ab", "#245bdb", "#3370ff", "#6b9aff", "#adc6ff", "#eef3ff"] },
+      "on-primary":    { "role": "primary", "displayName": "蓝上白字", "dark": "#ffffff" },
+      "bg":            { "role": "neutral", "displayName": "纸白 / 墨底", "dark": "#1b1c1e", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "bg-sunken":     { "role": "neutral", "displayName": "凹陷灰", "dark": "#151617", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "bg-hover":      { "role": "neutral", "displayName": "悬停灰", "dark": "#26282b", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "bg-active":     { "role": "neutral", "displayName": "按下灰", "dark": "#2e3034", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "panel":         { "role": "neutral", "displayName": "面板白", "dark": "#212225", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "border":        { "role": "neutral", "displayName": "分区边线", "dark": "#2f3134", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "border-strong": { "role": "neutral", "displayName": "控件描边", "dark": "#3d4044", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "text":          { "role": "neutral", "displayName": "正文墨", "dark": "#e8e9eb", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "text-2":        { "role": "neutral", "displayName": "次要灰", "dark": "#b0b4ba", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "text-3":        { "role": "neutral", "displayName": "提示灰", "dark": "#868b92", "tonalRamp": ["#151617", "#1f2329", "#3d4044", "#51565d", "#80868e", "#d0d3d8", "#e9eaed", "#f5f6f7"] },
+      "ok":            { "role": "status", "displayName": "正常绿", "dark": "#4cc27f", "tonalRamp": ["#0b2a17", "#124526", "#176a39", "#1f9d55", "#4cc27f", "#8adbab", "#c3eed4", "#e8f6ee"] },
+      "ok-soft":       { "role": "status", "displayName": "浅绿底", "dark": "#17301f", "tonalRamp": ["#0b2a17", "#124526", "#176a39", "#1f9d55", "#4cc27f", "#8adbab", "#c3eed4", "#e8f6ee"] },
+      "warn":          { "role": "status", "displayName": "琥珀", "dark": "#f0a33a", "tonalRamp": ["#2e1900", "#4f2c00", "#7d4500", "#c76a00", "#f0a33a", "#f6c47c", "#fbe1bb", "#fff4e5"] },
+      "warn-soft":     { "role": "status", "displayName": "浅琥珀底", "dark": "#36280f", "tonalRamp": ["#2e1900", "#4f2c00", "#7d4500", "#c76a00", "#f0a33a", "#f6c47c", "#fbe1bb", "#fff4e5"] },
+      "danger":        { "role": "status", "displayName": "警示红", "dark": "#f2706a", "tonalRamp": ["#3a0d0b", "#621714", "#99231e", "#d83931", "#f2706a", "#f7a39f", "#fbd0ce", "#fdecec"] },
+      "danger-soft":   { "role": "status", "displayName": "浅红底", "dark": "#3a1c1b", "tonalRamp": ["#3a0d0b", "#621714", "#99231e", "#d83931", "#f2706a", "#f7a39f", "#fbd0ce", "#fdecec"] }
+    },
+    "themes": {
+      "mechanism": "亮色为 :root 默认值；暗色在 @media (prefers-color-scheme: dark) 下的 :root:not([data-theme=\"light\"]) 与 :root[data-theme=\"dark\"] 两处生效。frontmatter 的 dark-* 键即暗色值。",
+      "switch": "侧栏底部分段选择：亮色 / 暗色 / 系统"
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "页标题", "purpose": "每页唯一的 h1；全站最大字号。" },
+      "title":    { "displayName": "区块标题", "purpose": "h2：信源、岗位、账号名等区块。" },
+      "body":     { "displayName": "正文", "purpose": "正文、表格、按钮、导航；全局等宽数字。" },
+      "body-sm":  { "displayName": "次要正文", "purpose": "页说明、表头、提示条、筛选控件文字。" },
+      "label":    { "displayName": "标注", "purpose": "徽标、计数、信源格元信息、页脚。" },
+      "mono":     { "displayName": "等宽", "purpose": "日志、key、路径等机器文本。" }
+    },
+    "shadows": [
+      { "name": "shadow-pop", "value": "0 6px 24px rgba(31, 35, 41, 0.1), 0 1px 3px rgba(31, 35, 41, 0.08)", "dark": "0 8px 28px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.4)", "purpose": "只用于 toast 等脱离页面的浮层。" },
+      { "name": "seg-pressed", "value": "0 1px 2px rgba(0,0,0,.08)", "purpose": "分段选择中被选中的那一片。" },
+      { "name": "switch-knob", "value": "0 1px 2px rgba(0,0,0,.25)", "purpose": "开关的白色圆钮。" },
+      { "name": "focus-halo", "value": "0 0 0 3px var(--primary-soft)", "purpose": "输入框、标签输入、聊天输入框的焦点光圈，配合描边变 primary。" }
+    ],
+    "motion": [
+      { "name": "color-fast", "value": ".12s", "purpose": "按钮、输入框、信源格、行操作的颜色 / 透明度过渡。" },
+      { "name": "ease-out-soft", "value": "cubic-bezier(.2,.8,.2,1)", "purpose": "开关圆钮滑动（.18s）与 toast 进场（.2s）。" },
+      { "name": "pulse", "value": "1.2s ease-in-out infinite", "purpose": "「检索中」状态点呼吸。" },
+      { "name": "spin", "value": ".8s linear infinite", "purpose": "加载图标旋转。" },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce → 关闭全部动画与过渡", "purpose": "无障碍。" }
+    ],
+    "breakpoints": [
+      { "name": "app-compact", "value": "860px", "purpose": "侧栏收为 64px 图标栏。" },
+      { "name": "form-stack", "value": "720px", "purpose": "表单改单列。" },
+      { "name": "report-mobile", "value": "640px", "purpose": "结果页手机布局。" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "次按钮，如页头的「立即检索」。",
+      "html": "<button class=\"ds-btn\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/></svg>立即检索</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius, 6px); border: 1px solid var(--border-strong, #d0d3d8); background: var(--panel, #fff); color: var(--text, #1f2329); font: 14px/1.6 var(--font, system-ui); cursor: pointer; transition: background-color .12s, border-color .12s, color .12s; } .ds-btn svg { width: 16px; height: 16px; } .ds-btn:hover { background: var(--bg-hover, #f0f1f3); } .ds-btn:active { background: var(--bg-active, #e9eaed); } .ds-btn:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "每屏唯一的蓝色主操作，如「打开结果页」。",
+      "html": "<button class=\"ds-btn-primary\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15 3h6v6\"/><path d=\"M10 14 21 3\"/><path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\"/></svg>打开结果页</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius, 6px); border: 1px solid var(--primary, #3370ff); background: var(--primary, #3370ff); color: var(--on-primary, #fff); font: 14px/1.6 var(--font, system-ui); cursor: pointer; transition: background-color .12s, border-color .12s; } .ds-btn-primary svg { width: 16px; height: 16px; } .ds-btn-primary:hover { background: var(--primary-hover, #245bdb); border-color: var(--primary-hover, #245bdb); } .ds-btn-primary:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button (small)",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "区块头里的次级跳转，如「管理信源 →」。",
+      "html": "<button class=\"ds-btn-ghost\">管理信源<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg></button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: var(--radius, 6px); border: 1px solid transparent; background: transparent; color: var(--text-2, #51565d); font: 13px/1.6 var(--font, system-ui); cursor: pointer; transition: background-color .12s, color .12s; } .ds-btn-ghost svg { width: 16px; height: 16px; } .ds-btn-ghost:hover { background: var(--bg-hover, #f0f1f3); color: var(--text, #1f2329); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "32px 输入框，焦点为蓝描边 + 浅蓝光圈。",
+      "html": "<input class=\"ds-input\" placeholder=\"例如：Singapore、Remote\" />",
+      "css": ".ds-input { width: 280px; height: 32px; padding: 0 10px; border-radius: var(--radius, 6px); border: 1px solid var(--border-strong, #d0d3d8); background: var(--panel, #fff); color: var(--text, #1f2329); font: 14px/1.6 var(--font, system-ui); outline: none; caret-color: var(--primary, #3370ff); transition: border-color .12s, box-shadow .12s; } .ds-input::placeholder { color: var(--text-3, #80868e); } .ds-input:hover { border-color: var(--text-3, #80868e); } .ds-input:focus { border-color: var(--primary, #3370ff); box-shadow: 0 0 0 3px var(--primary-soft, #eef3ff); }"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "220px 侧栏导航；当前页灰底、只有图标变蓝。",
+      "html": "<nav class=\"ds-nav\"><button aria-current=\"page\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"9\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\"/></svg><span>总览</span><span class=\"ds-count\">12</span></button><button><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><span>搜索条件</span></button><button><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4.9 19.1C1 15.2 1 8.8 4.9 4.9\"/><path d=\"M19.1 4.9C23 8.8 23 15.1 19.1 19\"/><circle cx=\"12\" cy=\"12\" r=\"2\"/></svg><span>信源与频率</span><i class=\"ds-alert\"></i></button></nav>",
+      "css": ".ds-nav { display: grid; gap: 2px; padding: 6px 8px; width: 220px; background: var(--bg-sunken, #f5f6f7); } .ds-nav button { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius, 6px); background: transparent; color: var(--text-2, #51565d); font: 14px/1.6 var(--font, system-ui); text-align: left; cursor: pointer; } .ds-nav svg { width: 17px; height: 17px; flex: none; } .ds-nav button:hover { background: var(--bg-hover, #f0f1f3); color: var(--text, #1f2329); } .ds-nav button[aria-current=page] { background: var(--bg-active, #e9eaed); color: var(--text, #1f2329); font-weight: 500; } .ds-nav button[aria-current=page] svg { color: var(--primary, #3370ff); } .ds-nav button:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; } .ds-count { margin-left: auto; font-size: 12px; color: var(--text-3, #80868e); } .ds-alert { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--danger, #d83931); }"
+    },
+    {
+      "name": "Filter Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "结果页的多选筛选块，带计数。",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">Boss 直聘 <span class=\"n\">42</span></button><button class=\"ds-chip\" aria-pressed=\"false\">V2EX <span class=\"n\">7</span></button></div>",
+      "css": ".ds-chips { display: flex; gap: 8px; } .ds-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--border-strong, #d0d3d8); background: var(--panel, #fff); color: var(--text-2, #51565d); font: 13px/1.6 var(--font, system-ui); cursor: pointer; } .ds-chip:hover { border-color: var(--text-3, #80868e); color: var(--text, #1f2329); } .ds-chip[aria-pressed=true] { border-color: var(--primary, #3370ff); background: var(--primary-soft, #eef3ff); color: var(--primary-text, #245bdb); } .ds-chip .n { color: var(--text-3, #80868e); font-size: 12px; } .ds-chip[aria-pressed=true] .n { color: var(--primary-text, #245bdb); opacity: .8; } .ds-chip:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "chip",
+      "refersTo": "seg-option",
+      "description": "单选筛选与主题切换。",
+      "html": "<div class=\"ds-seg\"><button aria-pressed=\"true\">今天新增</button><button aria-pressed=\"false\">近 7 天高匹配</button><button aria-pressed=\"false\">收藏</button></div>",
+      "css": ".ds-seg { display: inline-flex; padding: 2px; border-radius: var(--radius, 6px); background: var(--bg-sunken, #f5f6f7); border: 1px solid var(--border, #e4e5e8); } .ds-seg button { height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text-2, #51565d); font: 13px/1.6 var(--font, system-ui); cursor: pointer; } .ds-seg button:hover { color: var(--text, #1f2329); } .ds-seg button[aria-pressed=true] { background: var(--panel, #fff); color: var(--text, #1f2329); box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 500; } .ds-seg button:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Source Strip Cell",
+      "kind": "card",
+      "refersTo": "source-cell",
+      "description": "总览信源状态带里的一格：名称、状态点、下次时间、新增数。",
+      "html": "<div class=\"ds-strip\"><button class=\"ds-cell\"><span class=\"name\">Boss 直聘</span><span class=\"st\"><i class=\"ds-dot ok\"></i>正常</span><span class=\"meta\"><span>42 分钟后</span><span class=\"add\">+6</span></span></button><button class=\"ds-cell bad\"><span class=\"name\">RemoteOK</span><span class=\"st\"><i class=\"ds-dot danger\"></i>已暂停</span><span class=\"meta\"><span>手动</span><span class=\"add\"></span></span></button></div>",
+      "css": ".ds-strip { display: grid; grid-template-columns: repeat(2, 140px); gap: 8px; } .ds-cell { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--border, #e4e5e8); border-radius: var(--radius-lg, 8px); background: var(--panel, #fff); color: var(--text, #1f2329); text-align: left; cursor: pointer; font: 14px/1.6 var(--font, system-ui); transition: border-color .12s, background-color .12s; } .ds-cell:hover { border-color: var(--border-strong, #d0d3d8); background: var(--bg-hover, #f0f1f3); } .ds-cell:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; } .ds-cell.bad { border-color: color-mix(in srgb, var(--danger, #d83931) 40%, var(--border, #e4e5e8)); } .ds-cell .name { font-weight: 500; font-size: 13px; } .ds-cell .st { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2, #51565d); } .ds-cell .meta { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--text-3, #80868e); } .ds-cell .add { color: var(--text-2, #51565d); } .ds-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3, #80868e); } .ds-dot.ok { background: var(--ok, #1f9d55); } .ds-dot.danger { background: var(--danger, #d83931); }"
+    },
+    {
+      "name": "Notice",
+      "kind": "custom",
+      "refersTo": "notice",
+      "description": "页头下方一行可操作的提示，如信源暂停。",
+      "html": "<div class=\"ds-notice danger\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg><div class=\"grow\"><b>Boss 直聘 已暂停：</b>登录已失效</div><button class=\"ds-notice-btn\">去处理</button></div>",
+      "css": ".ds-notice { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius-lg, 8px); border: 1px solid var(--border, #e4e5e8); background: var(--bg-sunken, #f5f6f7); color: var(--text, #1f2329); font: 14px/1.6 var(--font, system-ui); } .ds-notice .grow { flex: 1; } .ds-notice > svg { width: 18px; height: 18px; flex: none; } .ds-notice.danger { background: var(--danger-soft, #fdecec); border-color: transparent; } .ds-notice.danger > svg { color: var(--danger, #d83931); } .ds-notice-btn { height: 26px; padding: 0 8px; border-radius: var(--radius, 6px); border: 1px solid var(--border-strong, #d0d3d8); background: var(--panel, #fff); color: var(--text, #1f2329); font-size: 13px; cursor: pointer; } .ds-notice-btn:hover { background: var(--bg-hover, #f0f1f3); } .ds-notice-btn:focus-visible { outline: 2px solid var(--primary, #3370ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Score + Badge",
+      "kind": "chip",
+      "refersTo": "score-hi",
+      "description": "匹配分与信源 / 状态徽标。",
+      "html": "<span class=\"ds-score hi\">86</span> <span class=\"ds-score\">54</span> <span class=\"ds-badge\">V2EX</span> <span class=\"ds-badge ok\">正常</span> <span class=\"ds-badge warn\">上次失败</span>",
+      "css": ".ds-score { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 22px; padding: 0 6px; border-radius: 4px; font: 600 12px/1 var(--font, system-ui); font-variant-numeric: tabular-nums; background: var(--bg-active, #e9eaed); color: var(--text-2, #51565d); } .ds-score.hi { background: var(--primary-soft, #eef3ff); color: var(--primary-text, #245bdb); } .ds-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px; font: 12px/1 var(--font, system-ui); background: var(--bg-active, #e9eaed); color: var(--text-2, #51565d); } .ds-badge.ok { background: var(--ok-soft, #e8f6ee); color: var(--ok, #1f9d55); } .ds-badge.warn { background: var(--warn-soft, #fff4e5); color: var(--warn, #c76a00); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "安静的值班台",
+    "overview": "这是一张一直开着、偶尔看一眼的工作台：白底或黑底，1px 细边线分区，一个蓝色负责「下一步做什么」，其余全部交给灰阶。参照飞书、Notion 的精致程度做常规后台：信息密度偏高（14px 正文、32px 控件高度），层级靠字重和三级文字灰拉开，而不是靠字号和色块。\n\n亮色是默认主题，暗色在「跟随系统」与「手动选暗色」两种情况下都生效；侧栏底部的分段切换可选亮色 / 暗色 / 系统。两套主题共用同一组变量名，组件只引用变量，所以任何新界面天然支持切换。\n\n使用者明确拒绝：装饰性渐变、玻璃效果、大数字统计卡模板（原话「简约而精巧」）。总览的统计是标题下的一行文字（「今天新增 N 条 · 高匹配 N 条 · 累计 N 条」），不是卡片。",
+    "keyCharacteristics": [
+      "中性灰阶 + 一个蓝，亮 / 暗两套同名变量",
+      "系统中文字体，全局等宽数字（tabular-nums）",
+      "1px 边线分区，几乎不用阴影",
+      "4 / 6 / 8px 三级圆角，胶囊只给开关、筛选块和状态点",
+      "状态色（绿 / 琥珀 / 红）只表示状态"
+    ],
+    "rules": [
+      { "name": "The 一个蓝 Rule", "body": "界面里只有一个彩色强调色。实心蓝只给主按钮、开关、焦点和运行中状态；其余蓝色出现都用 primary-soft 底 + primary-text 字。一屏只有一个蓝色主按钮（总览是「打开结果页」）。", "section": "colors" },
+      { "name": "The 状态色只表状态 Rule", "body": "绿、琥珀、红只在表达状态时出现（健康度、错误、日志级别、收藏 / 已投），从不作为装饰、分类色或图表配色。平台、类型这类分类用灰色徽标。", "section": "colors" },
+      { "name": "The 成对主题 Rule", "body": "组件里不写颜色字面量，一律 `var(--token)`；新增颜色必须同时给出亮、暗两个值，并在三处主题声明里保持一致。", "section": "colors" },
+      { "name": "The 14 为本 Rule", "body": "全站最大字号 20px。层级靠字重（400 / 500 / 600）和三级文字灰拉开，不靠放大字号；不做大数字展示。", "section": "typography" },
+      { "name": "The 等宽数字 Rule", "body": "body 全局开启 `font-variant-numeric: tabular-nums`，表格里的分数、时间、薪资、计数纵向对齐。", "section": "typography" },
+      { "name": "The 边线先于阴影 Rule", "body": "卡片、面板、信源格、表格在静止和悬停时都不加阴影，悬停只换底色或边线色。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 所有颜色走 `var(--token)`，新颜色同时定义亮、暗两值。",
+      "Do 每屏只放一个蓝色主按钮，其他操作用默认或 ghost 按钮。",
+      "Do 控件用 6px 圆角、容器用 8px、容器内小块用 4px。",
+      "Do 用 1px 边线和 bg / panel / bg-sunken 三档底色分层，悬停只换底色或边线。",
+      "Do 状态用「浅底 + 实色字」的徽标或 8px 状态点表达，并配文字说明原因。",
+      "Do 每条岗位都给出可点回原始页面的入口和信源徽标。",
+      "Do 图标用 lucide 线性 SVG，按钮内 16px、导航 17px、提示条 18px。"
+    ],
+    "donts": [
+      "Don't 使用装饰性渐变、玻璃 / 毛玻璃（backdrop-filter）效果。唯一的渐变用途是窄屏横向滚动行右侧的渐隐遮罩，用来提示还有内容。",
+      "Don't 做大数字统计卡；统计写成页标题下的一行文字。",
+      "Don't 用超过 20px 的字号，或用字号代替字重来做层级。",
+      "Don't 给卡片、面板、表格加阴影；阴影只给 toast、分段选中片和开关钮。",
+      "Don't 引入第二个强调色，或把绿 / 琥珀 / 红用作分类色和装饰。",
+      "Don't 用实心蓝写文字；蓝色文字一律用 primary-text。"
+    ]
+  }
+}

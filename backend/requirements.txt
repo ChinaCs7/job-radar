@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+httpx
+websockets
+python-jobspy
+lxml
+pypdf
+python-multipart

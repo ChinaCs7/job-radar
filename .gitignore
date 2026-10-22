@@ -1,0 +1,22 @@
+# 用户数据：设置（含 API key）、数据库、专用浏览器的登录态
+data/
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+backend/build/
+backend/dist/
+
+# Node
+node_modules/
+ui/dist/
+desktop/dist/
+desktop/out/
+
+# 设计流程的临时文件
+.impeccable/review/
+.impeccable/decision/
+.impeccable/mocks/
+
+*.log

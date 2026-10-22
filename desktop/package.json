@@ -1,0 +1,15 @@
+{
+  "name": "job-radar",
+  "productName": "求职雷达",
+  "version": "0.1.0",
+  "description": "本机运行的多信源求职信息聚合工具",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node run.js --dev",
+    "start": "node run.js"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}
