@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from dataclasses import asdict
 import sqlite3
 import threading
 from datetime import datetime, timedelta
 from typing import Any
 
 from .config import DB_PATH
+from .plan_context import current_plan
 from .models import Job
 
 SCHEMA = """
@@ -73,7 +76,7 @@ CREATE TABLE IF NOT EXISTS logs (
 """
 
 _local = threading.local()
-_write_lock = threading.Lock()
+_write_lock = threading.RLock()
 
 
 def conn() -> sqlite3.Connection:
@@ -86,28 +89,39 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-CLUSTER_VERSION = 2   # 去重规则变了就加 1，启动时会按新规则重算所有岗位的 cluster_key
+CLUSTER_VERSION = 3   # 城市与工作类型不同的岗位不能合并
 
 
 def init() -> None:
+    # SQLite's backup API includes committed WAL content. Keep the pre-plan database intact.
+    c = conn()
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='plans'").fetchone():
+        backup = DB_PATH.with_name('jobs.before-plans.db')
+        if DB_PATH.exists() and not backup.exists():
+            with sqlite3.connect(backup) as dst:
+                c.backup(dst)
     with _write_lock:
         c = conn()
         c.executescript(SCHEMA)
         # 新版本加的列（旧数据库没有）：AI 翻译的中文标题、AI 结论（推荐 / 可以看看 / 不合适）和理由
         have = {r[1] for r in c.execute("PRAGMA table_info(jobs)")}
-        for col in ("title_zh", "verdict", "verdict_reason"):
+        for col in ("title_zh", "verdict", "verdict_reason", "content_hash"):
             if col not in have:
                 c.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
         c.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
         row = c.execute("SELECT v FROM meta WHERE k='cluster_version'").fetchone()
         if not row or int(row[0]) < CLUSTER_VERSION:
             from .models import cluster_key
-            for r in c.execute("SELECT id, company, title FROM jobs").fetchall():
-                c.execute("UPDATE jobs SET cluster_key=? WHERE id=?", (cluster_key(r["company"], r["title"]), r["id"]))
+            for r in c.execute("SELECT id, company, title, city, job_type FROM jobs").fetchall():
+                c.execute("UPDATE jobs SET cluster_key=? WHERE id=?", (cluster_key(r["company"], r["title"],r['city'] or '',r['job_type'] or ''), r["id"]))
             c.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('cluster_version', ?)", (str(CLUSTER_VERSION),))
         # 0.1 版的「腾讯招聘」信源已并入「公司官网」，旧记录改成同一个平台名，免得被当成两个平台
         c.execute("UPDATE jobs SET platform='腾讯官网' WHERE source='tencent' AND platform='腾讯招聘'")
         c.commit()
+    from . import plans
+    plans.migrate()
+    c.execute("UPDATE runs SET finished_at=?,ok=0,error='上次运行因程序退出而中断，请重新检索',error_kind='interrupted' WHERE finished_at IS NULL",(now(),))
+    c.commit()
 
 
 def now() -> str:
@@ -116,16 +130,85 @@ def now() -> str:
 
 # ---------- jobs ----------
 
+def job_table() -> str:
+    from .plan_context import current_plan
+    pid = current_plan.get()
+    if not pid:
+        return "(SELECT jobs.*,0 AS attempts,'' AS retry_at FROM jobs)"
+    # The identifier is a bound value semantically; escape it for the composable subquery.
+    pid = pid.replace("'", "''")
+    replaced = {'status','first_seen','score','score_reason','verdict','verdict_reason','ai_summary','enriched'}
+    cols = ['j.'+r[1] for r in conn().execute('PRAGMA table_info(jobs)') if r[1] not in replaced]
+    cols += ['p.'+k for k in ('first_seen','score','score_reason','verdict','verdict_reason','ai_summary','attempts','retry_at')]
+    cols += ["CASE WHEN p.filtered=1 AND p.status NOT IN ('starred','applied') THEN 'filtered' ELSE p.status END AS status",
+             'p.evaluated AS enriched', 'p.plan_id', 'p.revision AS assessment_revision']
+    return '('+'SELECT '+','.join(cols)+f" FROM jobs j JOIN plan_jobs p ON p.job_id=j.id WHERE p.plan_id='{pid}')"
+
+
+def attach_job(job_id: str, stamp: str | None = None):
+    from .plan_context import current_plan
+    pid = current_plan.get()
+    if pid:
+        conn().execute('INSERT OR IGNORE INTO plan_jobs(plan_id,job_id,first_seen,revision) '
+                       'SELECT id,?,?,revision FROM plans WHERE id=? AND state!=\'deleted\'',
+                       (job_id,stamp or now(),pid))
+
+
+def update_evaluation(job_id: str, fields: dict, revision: int | None = None):
+    from .plan_context import current_plan
+    pid = current_plan.get()
+    if not pid: return
+    sets = dict(fields)
+    if 'enriched' in sets: sets['evaluated'] = sets.pop('enriched')
+    if sets.get('status') == 'filtered':
+        sets.pop('status'); sets['filtered']=1
+    elif sets.get('status') == 'new':
+        sets['filtered']=0
+    allowed={'status','filtered','score','score_reason','verdict','verdict_reason','ai_summary','evaluated','attempts','retry_at'}
+    sets={k:v for k,v in sets.items() if k in allowed}
+    if not sets: return
+    guard = ' AND revision=?' if revision is not None else ''
+    args = [*sets.values(),pid,job_id]+([revision] if revision is not None else [])
+    with _write_lock:
+        conn().execute('UPDATE plan_jobs SET '+','.join(k+'=?' for k in sets)+' WHERE plan_id=? AND job_id=?'+guard,args)
+        conn().commit()
+
+
+def pending_count() -> int:
+    return conn().execute(f'SELECT COUNT(*) FROM {job_table()} WHERE enriched=0 AND attempts<3').fetchone()[0]
+
 def upsert_jobs(jobs: list[Job]) -> list[str]:
-    """写入岗位，返回新增岗位的 id。已存在的只更新 last_seen（说明还挂着）。"""
+    """写入共享岗位事实并归入当前方案；更新变化字段，保留更完整正文，返回新事实 ID。"""
     added: list[str] = []
     t = now()
     with _write_lock:
         c = conn()
         for j in jobs:
+            stable={k:v for k,v in asdict(j).items() if k not in ('raw','url')}
+            content_hash=hashlib.sha256(json.dumps(stable,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
             row = c.execute("SELECT id FROM jobs WHERE id=?", (j.id,)).fetchone()
             if row:
-                c.execute("UPDATE jobs SET last_seen=? WHERE id=?", (t, j.id))
+                old = c.execute('SELECT * FROM jobs WHERE id=?',(j.id,)).fetchone()
+                if old['content_hash']==content_hash:
+                    c.execute('UPDATE jobs SET last_seen=? WHERE id=?',(t,j.id))
+                    attach_job(j.id,t)
+                    continue
+                fields = {k:getattr(j,k) for k in ('title','company','city','salary','salary_min_k','description','published_at','experience','education')
+                          if getattr(j,k) and getattr(j,k) != old[k]}
+                # Do not overwrite a completed detail with a shorter list snippet.
+                if len(j.description) < len(old['description'] or ''):
+                    fields.pop('description',None)
+                if fields:
+                    from .models import cluster_key
+                    merged={**dict(old),**fields}
+                    fields['cluster_key']=cluster_key(merged['company'],merged['title'],merged['city'],merged['job_type'])
+                    c.execute('UPDATE jobs SET '+','.join(k+'=?' for k in fields)+',enriched=0,last_seen=? WHERE id=?',
+                              (*fields.values(),t,j.id))
+                    c.execute("UPDATE plan_jobs SET evaluated=0,attempts=0,retry_at='',verdict='',score=NULL WHERE job_id=?",(j.id,))
+                else:
+                    c.execute("UPDATE jobs SET last_seen=? WHERE id=?", (t, j.id))
+                c.execute('UPDATE jobs SET content_hash=? WHERE id=?',(content_hash,j.id))
+                attach_job(j.id,t)
                 continue
             serial = (c.execute("SELECT COALESCE(MAX(serial),0)+1 FROM jobs").fetchone()[0])
             c.execute(
@@ -140,11 +223,19 @@ def upsert_jobs(jobs: list[Job]) -> list[str]:
                  json.dumps(j.raw, ensure_ascii=False, default=str)[:20000]),
             )
             added.append(j.id)
+            c.execute('UPDATE jobs SET content_hash=? WHERE id=?',(content_hash,j.id))
+            attach_job(j.id,t)
         c.commit()
     return added
 
 
 def update_job(job_id: str, fields: dict[str, Any]) -> None:
+    from .plan_context import current_plan
+    if current_plan.get():
+        fields = dict(fields)
+        names = {'score','score_reason','verdict','verdict_reason','ai_summary','status','enriched'}
+        local = {k:fields.pop(k) for k in list(fields) if k in names}
+        if local: update_evaluation(job_id,local)
     allowed = {"title", "company", "city", "region", "remote", "salary", "salary_min_k", "job_type",
                "tags", "description", "score", "score_reason", "ai_summary", "enriched", "status",
                "cluster_key", "experience", "education", "title_zh", "verdict", "verdict_reason", "published_at"}
@@ -166,13 +257,13 @@ def delete_job(job_id: str) -> None:
 
 
 def get_job(job_id: str) -> dict | None:
-    r = conn().execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    r = conn().execute(f"SELECT * FROM {job_table()} WHERE id=?", (job_id,)).fetchone()
     return _row(r) if r else None
 
 
 def jobs_to_enrich(limit: int = 20) -> list[dict]:
     rows = conn().execute(
-        "SELECT * FROM jobs WHERE enriched=0 ORDER BY first_seen DESC LIMIT ?", (limit,)).fetchall()
+        f"SELECT * FROM {job_table()} WHERE enriched=0 AND attempts<3 AND retry_at<=? ORDER BY first_seen LIMIT ?", (now(),limit)).fetchall()
     return [_row(r) for r in rows]
 
 
@@ -215,7 +306,7 @@ def query_jobs(*, days: int | None = None, date: str | None = None, sources: lis
         where.append("COALESCE(score,0)>=?"); args.append(min_score)
     order = {"new": "first_seen DESC", "score": "COALESCE(score,-1) DESC, first_seen DESC",
              "salary": "COALESCE(salary_min_k,-1) DESC"}.get(sort, "first_seen DESC")
-    sql = f"SELECT * FROM jobs {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY {order} LIMIT ?"
+    sql = f"SELECT * FROM {job_table()} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY {order} LIMIT ?"
     rows = [_row(r) for r in conn().execute(sql, (*args, limit * 3 if group else limit)).fetchall()]
     if not group:
         return rows
@@ -235,7 +326,7 @@ def query_jobs(*, days: int | None = None, date: str | None = None, sources: lis
         ids = {r["id"] for r in rows}
         for chunk in (keys[i:i + 400] for i in range(0, len(keys), 400)):
             for o in conn().execute(
-                    f"SELECT id, source, platform, url, cluster_key FROM jobs WHERE cluster_key IN ({','.join('?' * len(chunk))})",
+                    f"SELECT id, source, platform, url, cluster_key FROM {job_table()} WHERE cluster_key IN ({','.join('?' * len(chunk))})",
                     chunk).fetchall():
                 if o["id"] not in ids and o["cluster_key"] in seen:
                     seen[o["cluster_key"]]["also"].append(dict(o))
@@ -246,16 +337,16 @@ def job_stats() -> dict:
     c = conn()
     today = datetime.now().date().isoformat()
     visible = "status NOT IN ('dismissed','filtered')"
-    total = c.execute(f"SELECT COUNT(*) FROM jobs WHERE {visible} AND COALESCE(verdict,'')!='no'").fetchone()[0]
+    total = c.execute(f"SELECT COUNT(*) FROM {job_table()} WHERE {visible} AND COALESCE(verdict,'')!='no'").fetchone()[0]
     # 口径和岗位页的默认视图一致：AI 判为「不合适」的单独计数，不算进「新增」
     ok = f"{visible} AND COALESCE(verdict,'')!='no'"
-    today_n = c.execute(f"SELECT COUNT(*) FROM jobs WHERE {ok} AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
-    today_no = c.execute(f"SELECT COUNT(*) FROM jobs WHERE {visible} AND verdict='no' AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
-    high = c.execute(f"SELECT COUNT(*) FROM jobs WHERE {visible} AND verdict='recommend' AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
-    rec_total = c.execute(f"SELECT COUNT(*) FROM jobs WHERE {visible} AND verdict='recommend'").fetchone()[0]
+    today_n = c.execute(f"SELECT COUNT(*) FROM {job_table()} WHERE {ok} AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
+    today_no = c.execute(f"SELECT COUNT(*) FROM {job_table()} WHERE {visible} AND verdict='no' AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
+    high = c.execute(f"SELECT COUNT(*) FROM {job_table()} WHERE {visible} AND verdict='recommend' AND substr(first_seen,1,10)=?", (today,)).fetchone()[0]
+    rec_total = c.execute(f"SELECT COUNT(*) FROM {job_table()} WHERE {visible} AND verdict='recommend'").fetchone()[0]
     by_day = [dict(r) for r in c.execute(
-        f"SELECT substr(first_seen,1,10) AS day, COUNT(*) AS n FROM jobs WHERE {visible} GROUP BY day ORDER BY day DESC LIMIT 30")]
-    by_source = {r["source"]: r["n"] for r in c.execute(f"SELECT source, COUNT(*) n FROM jobs WHERE {visible} GROUP BY source")}
+        f"SELECT substr(first_seen,1,10) AS day, COUNT(*) AS n FROM {job_table()} WHERE {visible} GROUP BY day ORDER BY day DESC LIMIT 30")]
+    by_source = {r["source"]: r["n"] for r in c.execute(f"SELECT source, COUNT(*) n FROM {job_table()} WHERE {visible} GROUP BY source")}
     return {"total": total, "today": today_n, "today_no": today_no, "today_high": high, "recommend_total": rec_total,
             "by_day": by_day, "by_source": by_source}
 
@@ -264,21 +355,21 @@ def job_stats() -> dict:
 
 def run_start(source: str) -> int:
     with _write_lock:
-        cur = conn().execute("INSERT INTO runs (source, started_at) VALUES (?,?)", (source, now()))
+        cur = conn().execute("INSERT INTO runs (source, started_at, plan_id) VALUES (?,?,?)", (source, now(), current_plan.get()))
         conn().commit()
         return cur.lastrowid
 
 
-def run_finish(run_id: int, *, ok: bool, found: int = 0, added: int = 0, error: str = "", error_kind: str = "") -> None:
+def run_finish(run_id: int, *, ok: bool, found: int = 0, added: int = 0, error: str = "", error_kind: str = "", kept: int = 0, detail: str = "") -> None:
     with _write_lock:
-        conn().execute("UPDATE runs SET finished_at=?, ok=?, found=?, added=?, error=?, error_kind=? WHERE id=?",
-                       (now(), int(ok), found, added, error[:1000], error_kind, run_id))
+        conn().execute("UPDATE runs SET finished_at=?, ok=?, found=?, added=?, error=?, error_kind=?, kept=?, detail=? WHERE id=?",
+                       (now(), int(ok), found, added, error[:1000], error_kind, kept, detail, run_id))
         conn().commit()
 
 
 def last_runs() -> dict[str, dict]:
     rows = conn().execute(
-        "SELECT r.* FROM runs r JOIN (SELECT source, MAX(id) mid FROM runs GROUP BY source) m ON r.id=m.mid").fetchall()
+        "SELECT r.* FROM runs r JOIN (SELECT source, MAX(id) mid FROM runs WHERE plan_id=? GROUP BY source) m ON r.id=m.mid", (current_plan.get(),)).fetchall()
     return {r["source"]: dict(r) for r in rows}
 
 
@@ -288,7 +379,7 @@ def runs_today(source: str) -> int:
 
 
 def recent_runs(limit: int = 100) -> list[dict]:
-    return [dict(r) for r in conn().execute("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))]
+    return [dict(r) for r in conn().execute("SELECT * FROM runs WHERE plan_id=? ORDER BY id DESC LIMIT ?", (current_plan.get(),limit))]
 
 
 def add_usage(kind: str, model: str, prompt: int, hit: int, completion: int, requests: int, peak: bool, cost: float) -> None:
@@ -320,11 +411,11 @@ def usage_summary(days: int = 30) -> dict:
 
 def log(level: str, message: str, source: str = "") -> None:
     with _write_lock:
-        conn().execute("INSERT INTO logs (at, level, source, message) VALUES (?,?,?,?)", (now(), level, source, message[:2000]))
+        conn().execute("INSERT INTO logs (at, level, source, message,plan_id) VALUES (?,?,?,?,?)", (now(), level, source, message[:2000],current_plan.get()))
         conn().execute("DELETE FROM logs WHERE id < (SELECT MAX(id) - 5000 FROM logs)")
         conn().commit()
 
 
 def recent_logs(limit: int = 300, after_id: int = 0) -> list[dict]:
     return [dict(r) for r in conn().execute(
-        "SELECT * FROM logs WHERE id>? ORDER BY id DESC LIMIT ?", (after_id, limit))]
+        "SELECT * FROM logs WHERE id>? AND (plan_id=? OR plan_id IS NULL) ORDER BY id DESC LIMIT ?", (after_id,current_plan.get(),limit))]

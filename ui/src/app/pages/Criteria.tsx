@@ -5,24 +5,30 @@ import { JOB_TYPE_LABEL } from "../../lib/format";
 import { TagInput } from "../../components/ui";
 import type { PageProps } from "../App";
 
-export default function Criteria({ refresh, toast }: PageProps) {
+export default function Criteria({ refresh, toast, overview, currentPlan }: PageProps) {
   const [c, setC] = useState<C | null>(null);
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
+  const [name,setName] = useState('');
+  const [person,setPerson] = useState('');
+  const [revision,setRevision] = useState(1);
+  const [identity,setIdentity] = useState('');
+  const [error,setError] = useState('');
 
-  useEffect(() => { api.settings().then((s) => { setC(s.criteria); setSaved(JSON.stringify(s.criteria)); }); }, []);
+  useEffect(() => { api.settings().then((s) => { setC(s.criteria); setSaved(JSON.stringify(s.criteria)); setName(s.plan?.name || '');setPerson(s.plan?.person || '');setRevision(s.plan?.revision || 1);setIdentity(JSON.stringify([s.plan?.name,s.plan?.person])); }).catch(e=>setError(e.message)); }, []);
 
-  if (!c) return <div className="page"><div className="empty"><Loader2 className="spin" /></div></div>;
-  const dirty = JSON.stringify(c) !== saved;
+  if (!c) return <div className="page"><div className="empty">{error?<span role="alert">{error}</span>:<Loader2 className="spin" />}</div></div>;
+  const dirty = JSON.stringify(c) !== saved || JSON.stringify([name,person])!==identity;
   const set = <K extends keyof C>(k: K, v: C[K]) => setC({ ...c, [k]: v });
   const noRegion = !c.regions.domestic && !c.regions.overseas && !c.regions.remote;
 
   const save = async (andRun: boolean) => {
     setBusy(true);
     try {
-      const s = await api.saveSettings({ criteria: c, onboarded: true });
+      const s = await api.updatePlan(currentPlan,{criteria:c,name,person,revision});
       setSaved(JSON.stringify(s.criteria));
-      if (andRun) { await api.runNow(); toast("已保存，开始检索"); } else toast("已保存");
+      setRevision(s.revision);setIdentity(JSON.stringify([s.name,s.person]));
+      if (andRun) { const r=await api.runNow(undefined,currentPlan); toast(r.started.length?`已保存，启动 ${r.started.length} 个信源`:'已保存；没有启动新任务，请检查信源与预算'); } else toast("已保存，候选将按新条件重新评估");
       refresh();
     } catch (e) { toast((e as Error).message); }
     finally { setBusy(false); }
@@ -32,16 +38,18 @@ export default function Criteria({ refresh, toast }: PageProps) {
     <div className="page">
       <div className="page-head">
         <div className="grow">
-          <h1>搜索条件</h1>
-          <p>所有信源都按这里的条件检索。改完保存，下一轮检索生效；已经收集到的岗位不受影响。</p>
+          <h1>{overview?.plan?.name || "方案条件"}</h1>
+          <p>只修改当前方案。保存后按新条件重新评估已有候选，其他方案保持独立。</p>
         </div>
       </div>
 
       <div className="panel panel-pad">
+        <div className="field"><label htmlFor="plan-name">方案名称</label><input id="plan-name" className="input" value={name} onChange={e=>setName(e.target.value)} maxLength={100}/><span className="hint">建议包含方向、城市或工作类型，便于区分。</span></div>
+        <div className="field"><label htmlFor="plan-person">求职者</label><input id="plan-person" className="input" value={person} onChange={e=>setPerson(e.target.value)} maxLength={60}/><span className="hint">每个方案的个人简介独立保存。</span></div>
         <div className="field">
           <label htmlFor="kw">关键词</label>
           <TagInput id="kw" value={c.keywords} onChange={(v) => set("keywords", v)} placeholder="例如：AI Agent、大模型应用、LLM" />
-          <span className="hint">每个关键词都会单独搜一遍。英文平台（LinkedIn、RemoteOK、HN）也用这些词，建议中英文各放一两个。关键词越多，检索越慢。</span>
+          <span className="hint">关键词按每轮访问预算轮转，不会一直只搜前几个。英文平台（LinkedIn、RemoteOK、HN）也用这些词，建议中英文各放一两个。关键词越多，检索越慢。</span>
         </div>
         <div className="field">
           <label htmlFor="city">城市</label>
@@ -78,7 +86,7 @@ export default function Criteria({ refresh, toast }: PageProps) {
               <option key={v} value={v}>{l}</option>
             ))}
           </select>
-          <span className="hint">超过这个时间发布的岗位不要。平台没写发布时间的帖子，由 AI 从正文判断（例如「2023 年」「去年」）。</span>
+          <span className="hint">超过这个时间发布的岗位不要。未知日期会标为待核验，不能作为已确认的新岗位推荐。</span>
         </div>
         <div className="field">
           <label>岗位类型</label>
@@ -95,7 +103,7 @@ export default function Criteria({ refresh, toast }: PageProps) {
         <div className="field">
           <label htmlFor="ex">排除词</label>
           <TagInput id="ex" value={c.exclude} onChange={(v) => set("exclude", v)} placeholder="例如：外包、销售、驻场" />
-          <span className="hint">岗位名或公司名里出现这些词就不收。</span>
+          <span className="hint">岗位名或公司名里出现这些词会标记为已过滤，保留原因供检查。</span>
         </div>
         <div className="field">
           <label htmlFor="pf">关于你</label>
@@ -106,7 +114,7 @@ export default function Criteria({ refresh, toast }: PageProps) {
       </div>
 
       <div className="savebar">
-        <button className="btn primary" disabled={!dirty || busy || noRegion} onClick={() => save(false)}>
+        <button className="btn primary" disabled={!dirty || busy || noRegion || !name.trim() || !person.trim()} onClick={() => save(false)}>
           {busy ? <Loader2 className="spin" /> : <Save />}保存
         </button>
         <button className="btn" disabled={busy || noRegion || !c.keywords.length} onClick={() => save(true)}>保存并立即检索</button>

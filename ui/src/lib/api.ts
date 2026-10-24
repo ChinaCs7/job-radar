@@ -1,5 +1,16 @@
 // 开发时界面跑在 Vite（5173），接口在 17860；打包后界面和接口同源
 export const API_BASE = location.port === "5173" ? "http://127.0.0.1:17860" : "";
+let selectedPlan = new URLSearchParams(location.search).get('plan_id') || localStorage.getItem('jr-plan') || 'legacy';
+export const getSelectedPlan = () => selectedPlan;
+export const selectPlan = (id: string) => { selectedPlan = id; localStorage.setItem('jr-plan', id); };
+
+export interface Plan {
+  id: string; name: string; person: string; criteria: Criteria;
+  sources: Record<string, SourceConfig>; running: boolean;
+  state: 'active' | 'archived' | 'deleted'; revision: number;
+  evaluation_enabled: boolean;
+  candidates?: number; visible?: number; pending?: number; recommended?: number;
+}
 
 export type Region = "domestic" | "overseas";
 export type JobStatus = "new" | "seen" | "starred" | "applied" | "dismissed";
@@ -59,6 +70,8 @@ export interface SourceConfig {
 }
 
 export interface Source {
+  progress?: { stage: string; message: string; at: string };
+  daily_used?: number; daily_cap?: number;
   id: string;
   name: string;
   group: string;
@@ -87,6 +100,7 @@ export interface Criteria {
 }
 
 export interface Settings {
+  plan?: Pick<Plan, 'id' | 'name' | 'person' | 'revision' | 'state'>;
   onboarded: boolean;
   running: boolean;
   theme: "light" | "dark" | "system";
@@ -107,6 +121,7 @@ export interface Stats {
 }
 
 export interface Overview {
+  plan?: Pick<Plan, 'id' | 'name' | 'person' | 'revision' | 'state'>;
   stats: Stats;
   sources: Source[];
   running: boolean;
@@ -150,7 +165,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     r = await fetch(API_BASE + path, {
       ...init,
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), 'X-Plan-ID':selectedPlan, ...init?.headers },
     });
   } catch {
     throw new ApiError("连不上本地服务，请确认求职雷达正在运行");
@@ -166,12 +181,20 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 const body = (b: unknown) => ({ method: "POST", body: JSON.stringify(b) });
 
 export const api = {
+  plans: (all = false) => req<Plan[]>(`/api/plans?include_deleted=${all}`),
+  createPlan: (data: Partial<Plan>) => req<Plan>('/api/plans',body(data)),
+  updatePlan: (id: string, patch: Partial<Plan>) => req<Plan>(`/api/plans/${id}`,{method:'PATCH',body:JSON.stringify(patch)}),
+  copyPlan: (id: string) => req<Plan>(`/api/plans/${id}/copy`,body({})),
+  deletePlan: (id: string) => req<Plan>(`/api/plans/${id}`,{method:'DELETE'}),
+  batchPlans: (data: {person:string;directions:string[];cities:string[];criteria:Partial<Criteria>}) => req<Plan[]>('/api/plans/batch',body(data)),
+  reevaluate: (id: string) => req(`/api/plans/${id}/reevaluate`,body({})),
+  cancel: (source?: string) => req<{cancelled:number}>('/api/cancel',body({source})),
   overview: () => req<Overview>("/api/overview"),
   settings: () => req<Settings>("/api/settings"),
   saveSettings: (patch: Partial<Settings> | Record<string, unknown>) =>
     req<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(patch) }),
   sources: () => req<Source[]>("/api/sources"),
-  runNow: (source?: string) => req<{ ok: boolean; started: string[] }>("/api/run", body({ source })),
+  runNow: (source?: string, planId?: string) => req<{ ok: boolean; started: string[] }>("/api/run", {...body({ source }),...(planId?{headers:{'X-Plan-ID':planId}}:{})}),
   setRunning: (running: boolean) => req<Settings>("/api/running", body({ running })),
   resume: (sid: string) => req(`/api/sources/${sid}/resume`, body({})),
   jobs: (params: Record<string, string | number | boolean | undefined>) => {
@@ -204,7 +227,7 @@ export const api = {
     if (!r.ok) { let m = `上传失败（${r.status}）`; try { m = (await r.json()).detail || m; } catch { /* */ } throw new ApiError(m); }
     return r.json() as Promise<{ name: string; text: string; chars: number; masked: number }>;
   },
-  applyProposal: (pid: string) => req<{ ok: boolean }>(`/api/assistant/proposals/${pid}/apply`, body({})),
+  applyProposal: (pid: string) => req<{ ok: boolean; plan_id: string }>(`/api/assistant/proposals/${pid}/apply`, body({})),
   discardProposal: (pid: string) => req<{ ok: boolean }>(`/api/assistant/proposals/${pid}/discard`, body({})),
   summary: (date: string) => req<{ text?: string; count?: number; at?: string }>(`/api/summary?date=${date}`),
   makeSummary: (date: string) => req<{ text: string; count: number; at: string }>("/api/summary", body({ date })),
@@ -214,7 +237,7 @@ export const api = {
 // Electron 预加载脚本暴露的能力；在普通浏览器里不存在，退回到 window.open
 interface DesktopBridge {
   openExternal(url: string): void;
-  openReport(): void;
+  openReport(planId: string): void;
   showItem(path: string): void;
 }
 declare global { interface Window { desktop?: DesktopBridge; __SNAPSHOT__?: { jobs: Job[]; at: string; days: number } } }
@@ -225,6 +248,6 @@ export function openExternal(url: string) {
 }
 
 export function openReport() {
-  if (window.desktop) window.desktop.openReport();
-  else window.open(`${API_BASE || location.origin}/report`, "_blank", "noopener");
+  if (window.desktop) window.desktop.openReport(selectedPlan);
+  else window.open(`${API_BASE || location.origin}/report?plan_id=${encodeURIComponent(selectedPlan)}`, "_blank", "noopener");
 }

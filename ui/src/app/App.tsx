@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BriefcaseBusiness, Coins, KeyRound, LayoutDashboard, RadioTower, ScrollText, SlidersHorizontal, Sparkles } from "lucide-react";
-import { api, type Overview as OverviewData } from "../lib/api";
+import { BriefcaseBusiness, Coins, KeyRound, LayoutDashboard, RadioTower, ScrollText, SlidersHorizontal, Sparkles, FolderOpen } from "lucide-react";
+import { api, selectPlan, getSelectedPlan, type Plan, type Overview as OverviewData } from "../lib/api";
 import { untilLabel } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { Switch, ThemeToggle, useToast } from "../components/ui";
+import Plans from "./pages/Plans";
+import "../styles/plans.css";
 import ActivityBar from "./ActivityBar";
 import Overview from "./pages/Overview";
 import Jobs from "./pages/Jobs";
@@ -14,28 +16,34 @@ import Assistant from "./pages/Assistant";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 
-export type PageId = "overview" | "jobs" | "criteria" | "sources" | "accounts" | "assistant" | "usage" | "logs";
+export type PageId = "plans" | "overview" | "jobs" | "criteria" | "sources" | "accounts" | "assistant" | "usage" | "logs";
 
 const NAV: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: "plans", label: "求职方案", icon: FolderOpen },
   { id: "overview", label: "总览", icon: LayoutDashboard },
   { id: "jobs", label: "岗位", icon: BriefcaseBusiness },
-  { id: "criteria", label: "搜索条件", icon: SlidersHorizontal },
+  { id: "criteria", label: "方案条件", icon: SlidersHorizontal },
   { id: "sources", label: "信源与频率", icon: RadioTower },
   { id: "accounts", label: "账号与密钥", icon: KeyRound },
-  { id: "assistant", label: "AI 助手", icon: Sparkles },
+  { id: "assistant", label: "指挥助手", icon: Sparkles },
   { id: "usage", label: "AI 用量", icon: Coins },
   { id: "logs", label: "运行日志", icon: ScrollText },
 ];
 
 export interface PageProps {
+  planList: Plan[];
   overview: OverviewData | null;
+  currentPlan: string;
+  choosePlan: (id: string) => void;
   refresh: () => void;
   go: (p: PageId) => void;
   toast: (m: string) => void;
 }
 
 export default function App() {
-  const [page, setPage] = useState<PageId>("overview");
+  const [page, setPage] = useState<PageId>("plans");
+  const [planList,setPlanList] = useState<Plan[]>([]);
+  const [currentPlan,setCurrentPlan] = useState(getSelectedPlan());
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [offline, setOffline] = useState(false);
   const [theme, setTheme] = useTheme();
@@ -44,7 +52,18 @@ export default function App() {
   // 记住每个信源上一次看到的状态：从「检索中 / 排队中」变成别的状态，就说明这一轮跑完了，弹提示
   const prevStates = useRef<Record<string, string>>({});
   const refresh = useCallback(() => {
+    const requestedPlan=getSelectedPlan();
+    api.plans(true).then(all => {
+      const list=all.filter(p=>p.state!=='deleted');
+      setPlanList(all);
+      if(!list.some(p=>p.id===getSelectedPlan())) {
+        const next=list.find(p=>p.state==='active') || list[0];
+        if(next) { selectPlan(next.id); setCurrentPlan(next.id); setOverview(null); prevStates.current={}; }
+        else { setPage('plans'); setOverview(null); }
+      }
+    }).catch(() => {});
     api.overview().then((o) => {
+      if (requestedPlan!==getSelectedPlan()) return;
       const prev = prevStates.current;
       for (const s of o.sources) {
         const was = prev[s.id];
@@ -77,7 +96,10 @@ export default function App() {
     refresh();
   };
 
-  const props: PageProps = { overview, refresh, go: setPage, toast };
+  const choosePlan = (id: string) => {
+    selectPlan(id); setCurrentPlan(id); setOverview(null); prevStates.current={}; refresh();
+  };
+  const props: PageProps = { overview, refresh, go: setPage, toast, currentPlan, choosePlan, planList };
 
   return (
     <div className="shell">
@@ -98,8 +120,8 @@ export default function App() {
         <div className="side-foot">
           <div className="runbox">
             <div className="row">
-              <b className="grow">自动检索</b>
-              <Switch label="自动检索" checked={!!overview?.running} disabled={!overview || !overview.has_keywords}
+              <b className="grow">当前方案自动检索</b>
+              <Switch label="自动检索" checked={!!overview?.running} disabled={!overview || !overview.has_keywords || overview.plan?.state!=="active"}
                 onChange={toggleRunning} />
             </div>
             <small>
@@ -114,7 +136,18 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
+        <div className="plan-context">
+          <label>当前方案<select className="select" aria-label="当前方案" value={currentPlan} onChange={e=>choosePlan(e.target.value)}>
+            {!planList.some(p=>p.id===currentPlan) && <option value={currentPlan}>请选择可用方案</option>}
+            {planList.filter(p=>p.state!=='deleted').map(p=><option key={p.id} value={p.id}>{p.person} / {p.name}{p.state==='archived'?'（已归档）':''}</option>)}
+          </select></label>
+          <span className="plan-context-note">岗位、条件和运行记录属于当前方案</span>
+          <button className="btn ghost sm" onClick={()=>setPage('plans')}>管理方案</button>
+          {overview?.plan?.state==='archived' && <span className="badge">已归档 · 可查看历史</span>}
+        </div>
         {overview && <ActivityBar overview={overview} />}
+        {page === "plans" && <Plans {...props} />}
+        <div className="plan-content" key={currentPlan}>
         {page === "overview" && <Overview {...props} />}
         {page === "jobs" && <Jobs {...props} />}
         {page === "criteria" && <Criteria {...props} />}
@@ -123,6 +156,7 @@ export default function App() {
         {page === "assistant" && <Assistant {...props} />}
         {page === "usage" && <Usage {...props} />}
         {page === "logs" && <Logs {...props} />}
+        </div>
       </main>
       {toastNode}
     </div>

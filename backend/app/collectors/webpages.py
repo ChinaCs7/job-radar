@@ -288,6 +288,10 @@ class WebPage(Collector):
         self.site = site
         self.info = SourceInfo(site.id, site.name, site.group, "domestic",
                                needs_login=site.needs_login or site.verify_once, note=site.note)
+        if site.id=='nowcoder':
+            self.info.note='仅支持校园招聘入口；非实习方案暂不支持。'+self.info.note
+        elif not site.capture and not site.parse_html:
+            self.info.note='线索采集：详情与发布日期待核验，不代表全站最新岗位。'+self.info.note
         self.info.verify_once = site.verify_once  # type: ignore[attr-defined]
         self.info.home = site.home  # type: ignore[attr-defined]
 
@@ -300,10 +304,15 @@ class WebPage(Collector):
             raise CollectorError("login", f"{self.site.name} 需要登录：请在「账号与密钥」里打开登录窗口")
 
     async def collect(self, criteria, cfg, settings):
+        from .. import plans, db
+        from ..execution import progress
         s = self.site
-        kws = keywords_of(criteria)[: int(cfg.get("max_keywords", 2))]
+        if s.id=='nowcoder' and 'intern' not in criteria.get('job_types',[]):
+            raise CollectorError('config','当前牛客适配器只覆盖校招入口，不用于社招方案；请关闭该信源或等待社招适配')
+        kws = plans.rotate(s.id,keywords_of(criteria),min(3,int(cfg.get("max_keywords", 2))))
         out: list[Job] = []
         for kw in kws:
+            progress(s.id,'searching',f'搜索「{kw}」；按当前平台的专用解析规则提取')
             q = kw + s.suffix
             async with browser.Visit(s.url(q, criteria), capture=s.capture or None) as v:
                 if s.parse_html:
@@ -321,11 +330,16 @@ class WebPage(Collector):
                     self._check(v)
                     if not got:
                         raise CollectorError("network", f"{s.name} 没有返回搜索结果（页面可能改版或加载太慢）")
+                    parsed_count=0
                     for d in got:
                         try:
-                            out += [j for j in s.parse(d) if j.url]
+                            parsed=[j for j in s.parse(d) if j.url]
+                            parsed_count+=len(parsed)
+                            out += parsed
                         except (AttributeError, TypeError, KeyError):
                             continue
+                    if not parsed_count:
+                        raise CollectorError('parse','接口已响应但没有解析出岗位；可能为空或结构变化，不能确认检索完成')
                 else:
                     await v.scroll(s.scroll)
                     html = await v.html()
@@ -333,6 +347,8 @@ class WebPage(Collector):
                     items = harvest(html, v.final_url or s.home, s.href, container_xpath=s.container)
                     if not items and s.needs_login and ("登录" in html[:200000]):
                         raise CollectorError("login", f"{s.name} 需要登录：请在「账号与密钥」里打开登录窗口")
+                    if not items:
+                        raise CollectorError('parse',f'{s.name} 未识别到结果容器；不将空结果视为完整检索')
                     for href, title, ctx in items:
                         title, ctx = split_title(title, ctx)
                         out.append(Job(

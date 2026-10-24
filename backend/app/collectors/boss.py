@@ -156,30 +156,100 @@ class Boss(Collector):
                       note="用专用浏览器和你自己的账号，频率请别太高")
 
     async def collect(self, criteria, cfg, settings):
+        from .. import plans, db
+        from ..execution import progress
         kws = keywords_of(criteria)
         cities = [c for c in (city_code(x) for x in criteria.get("cities") or []) if c] or [NATIONWIDE]
-        combos = [(k, c) for k in kws for c in cities][: int(cfg.get("max_combos", 3))]
-        max_pages = int(cfg.get("max_pages", 1))
+        combos = plans.rotate('boss',[(k, c) for k in kws for c in cities],min(3,int(cfg.get("max_combos", 3))))
+        max_pages = max(1,min(3,int(cfg.get("max_pages", 2))))
         out: list[Job] = []
         async with browser.browser_slot(), browser.CDPPage() as page:
             await page.send("Network.enable")
             await page.send("Page.enable")
             cap = _Capture(page)
             for i, (kw, city) in enumerate(combos):
+                progress('boss','searching',f'组合 {i+1}/{len(combos)}：{kw}，城市代码 {city}')
                 if i:
                     await asyncio.sleep(random.uniform(6, 15))   # 组合之间停一会儿，像人在换条件
                 await page.send("Page.navigate", {"url": search_url(kw, city)})
+                seen_ids=set()
                 for pg in range(1, max_pages + 1):
                     if pg > 1:
                         await asyncio.sleep(random.uniform(2, 4))
                         await _human_scroll(page)
-                    data = await cap.next(25 if pg == 1 else 15)
+                    try:
+                        data = await cap.next(25 if pg == 1 else 15)
+                    except CollectorError as e:
+                        e.partial=out
+                        raise
                     state, why = classify(data)
                     if state in ("blocked", "login"):
-                        raise CollectorError(state, why)
+                        raise CollectorError(state, why, out)
                     if state != "ok":
+                        if state == 'error': raise CollectorError('network',why+'；本轮未完成',out)
                         break
-                    out += [j for j in map(map_job, data["zpData"]["jobList"]) if j]
+                    page_jobs=[j for j in map(map_job,data['zpData']['jobList']) if j]
+                    fresh=[j for j in page_jobs if j.id not in seen_ids]
+                    if not fresh:
+                        db.log('warn',f'{kw} 第 {pg} 页未产生新岗位，停止滚动，未宣称已搜全','boss')
+                        break
+                    seen_ids.update(j.id for j in fresh)
+                    out += fresh
+                    progress('boss','searching',f'{kw}：已验证 {pg} 页，取得 {len(seen_ids)} 个不同岗位')
                     if data["zpData"].get("hasMore") is False:
                         break
-        return out
+        unique=list({j.id:j for j in out}.values())
+        # Only enrich candidates that plausibly fit hard conditions; cap detail visits per run.
+        from ..pipeline import passes
+        from ..models import parse_salary_min_k
+        budget=max(0,min(5,int(cfg.get('detail_budget',3))))
+        for j in unique:
+            if not budget: break
+            j.salary_min_k=parse_salary_min_k(j.salary)
+            if not passes(j.__dict__,criteria)[0]: continue
+            old=db.conn().execute('SELECT description,last_seen FROM jobs WHERE id=?',(j.id,)).fetchone()
+            if old and len(old['description'] or '')>=180: continue
+            progress('boss','detail',f'补全岗位详情：{j.title}')
+            try:
+                detail=await fetch_detail(j.url)
+                if detail.get('description'): j.description=detail['description']
+                if detail.get('published_at'): j.published_at=detail['published_at']
+                if detail.get('job_type'): j.job_type=detail['job_type']
+            except CollectorError as e:
+                e.partial=unique
+                raise
+            except Exception as e:
+                db.log('warn',f'详情未补全：{j.title}；{e}','boss')
+            budget-=1
+        return unique
+
+
+def parse_detail(html: str) -> dict:
+    """Boss-specific detail extraction; never treat nearby navigation as a JD."""
+    import lxml.html
+    doc=lxml.html.fromstring(html)
+    result={}
+    for script in doc.xpath('//script[@type="application/ld+json"]/text()'):
+        try: items=json.loads(script)
+        except ValueError: continue
+        if not isinstance(items,list): items=[items]
+        for item in items:
+            if not isinstance(item,dict) or item.get('@type')!='JobPosting': continue
+            from .base import strip_html
+            result['description']=strip_html(str(item.get('description') or ''))
+            result['published_at']=str(item.get('datePosted') or '')[:10]
+            if item.get('employmentType')=='FULL_TIME': result['job_type']='fulltime'
+    blocks=doc.xpath('//*[contains(concat(" ",normalize-space(@class)," ")," job-sec-text ")]')
+    text='\n\n'.join(' '.join(b.text_content().split()) for b in blocks)
+    if len(text)>len(result.get('description','')): result['description']=text[:12000]
+    return result
+
+
+async def fetch_detail(url: str) -> dict:
+    async with browser.Visit(url,settle=3) as visit:
+        html=await visit.html()
+        if any(x in visit.final_url for x in ('verify','/safe/')) or '验证' in visit.title:
+            raise CollectorError('blocked','Boss 详情需要人工验证，已暂停')
+        if '/web/user/' in visit.final_url or 'passport' in visit.final_url:
+            raise CollectorError('login','Boss 详情需要登录')
+        return parse_detail(html)

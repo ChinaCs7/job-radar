@@ -136,7 +136,8 @@ class CDPPage:
         async for msg in self.ws:
             data = json.loads(msg)
             if "id" in data and data["id"] in self._pending:
-                self._pending.pop(data["id"]).set_result(data)
+                future = self._pending.pop(data["id"])
+                if not future.done(): future.set_result(data)
             elif "method" in data:
                 await self.events.put(data)
 
@@ -144,8 +145,12 @@ class CDPPage:
         self._id += 1
         fut = asyncio.get_running_loop().create_future()
         self._pending[self._id] = fut
-        await self.ws.send(json.dumps({"id": self._id, "method": method, "params": params or {}}))
-        res = await asyncio.wait_for(fut, timeout)
+        request_id = self._id
+        try:
+            await self.ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+            res = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._pending.pop(request_id, None)
         if "error" in res:
             raise RuntimeError(f"CDP {method}: {res['error'].get('message')}")
         return res.get("result", {})
@@ -161,6 +166,7 @@ BROWSER_LOCK = asyncio.Lock()
 import contextvars
 CURRENT_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar("current_source", default="")
 ACTIVE_SOURCE = ""
+ACTIVE_TASK = None
 # 两次打开网页之间至少隔这么久（秒，随机取）。多个信源同时到点时会一个一个来，不会连续猛刷
 GAP_SECONDS = (20, 45)
 _last_release = 0.0
@@ -172,19 +178,28 @@ class browser_slot:
     async def __aenter__(self):
         import random
         import time
-        global ACTIVE_SOURCE
+        global ACTIVE_SOURCE, ACTIVE_TASK
         await BROWSER_LOCK.acquire()
         wait = _last_release + random.uniform(*GAP_SECONDS) - time.monotonic()
         ACTIVE_SOURCE = CURRENT_SOURCE.get()
-        if wait > 0:
-            await asyncio.sleep(wait)
+        from .plan_context import current_plan
+        ACTIVE_TASK = (current_plan.get() or 'legacy', ACTIVE_SOURCE)
+        try:
+            if wait > 0:
+                await asyncio.sleep(wait)
+        except BaseException:
+            ACTIVE_SOURCE = ""
+            ACTIVE_TASK = None
+            BROWSER_LOCK.release()
+            raise
         return self
 
     async def __aexit__(self, *exc):
         import time
-        global _last_release, ACTIVE_SOURCE
+        global _last_release, ACTIVE_SOURCE, ACTIVE_TASK
         _last_release = time.monotonic()
         ACTIVE_SOURCE = ""
+        ACTIVE_TASK = None
         BROWSER_LOCK.release()
 
 

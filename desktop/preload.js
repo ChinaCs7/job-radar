@@ -3,6 +3,6 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("desktop", {
   openExternal: (url) => ipcRenderer.send("open-external", String(url)),
-  openReport: () => ipcRenderer.send("open-report"),
+  openReport: (planId) => ipcRenderer.send("open-report", planId),
   showItem: (p) => ipcRenderer.send("show-item", String(p)),
 });

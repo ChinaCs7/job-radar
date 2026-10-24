@@ -145,7 +145,7 @@ function createTray() {
 }
 
 ipcMain.on("open-external", (_e, url) => openSafe(url));
-ipcMain.on("open-report", () => openSafe(reportUrl()));
+ipcMain.on("open-report", (_event, planId) => openSafe(`${reportUrl()}?plan_id=${encodeURIComponent(typeof planId === 'string' ? planId : 'legacy')}`));
 ipcMain.on("show-item", (_e, p) => { if (typeof p === "string" && fs.existsSync(p)) shell.showItemInFolder(p); });
 
 app.whenReady().then(async () => {

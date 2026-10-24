@@ -9,7 +9,7 @@ import type { PageProps } from "../App";
 
 type Range = "1" | "3" | "7" | "30" | "all";
 type Sort = "ai" | "published" | "new" | "salary";
-type StatusF = "all" | "new" | "starred" | "applied" | "dismissed";
+type StatusF = "filtered" | "all" | "new" | "starred" | "applied" | "dismissed";
 
 function toggle<T>(set: Set<T>, v: T): Set<T> {
   const n = new Set(set);
@@ -43,7 +43,7 @@ export default function Jobs({ toast, overview }: PageProps) {
   const load = useCallback(() => {
     setLoading(true);
     const days = range === "all" || range === "1" ? undefined : Number(range);
-    api.jobs({ days, date: range === "1" ? today() : undefined, limit: 2000, status: statusF === "dismissed" ? "dismissed" : undefined })
+    api.jobs({ days, date: range === "1" ? today() : undefined, limit: 2000, status: statusF === "dismissed" || statusF === "filtered" ? statusF : undefined })
       .then((r) => setAll(r.jobs))
       .catch((e) => { toast((e as Error).message); setAll((x) => x ?? []); })
       .finally(() => setLoading(false));
@@ -56,7 +56,7 @@ export default function Jobs({ toast, overview }: PageProps) {
     || (regions.has("overseas") && j.region === "overseas") || (regions.has("remote") && j.remote);
   const mType = (j: Job) => types.size === 0 || types.has(j.job_type || "unknown");
   const mPlat = (j: Job) => plats.size === 0 || plats.has(facetPlatform(j));
-  const mVerdict = (j: Job) => verdicts.has(j.verdict || "");
+  const mVerdict = (j: Job) => statusF === 'filtered' || verdicts.has(j.verdict || "");
   const mStatus = (j: Job) => statusF === "all" || statusF === "dismissed" || j.status === statusF;
   const mMulti = (j: Job) => !multiOnly || platformsOf(j).length > 1;
   const mQ = (j: Job) => {
@@ -193,7 +193,7 @@ export default function Jobs({ toast, overview }: PageProps) {
           <span className="grow" />
           <select className="select" style={{ width: "auto" }} value={statusF} onChange={(e) => setStatusF(e.target.value as StatusF)} aria-label="状态">
             <option value="all">全部状态</option><option value="new">未读</option><option value="starred">收藏</option>
-            <option value="applied">已投</option><option value="dismissed">标为不合适的</option>
+            <option value="applied">已投</option><option value="dismissed">标为不合适的</option><option value="filtered">已过滤（检查原因）</option>
           </select>
           <select className="select" style={{ width: "auto" }} value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="排序">
             <option value="ai">AI 推荐优先</option><option value="published">最新发布</option><option value="new">最新发现</option><option value="salary">薪资</option>
@@ -280,6 +280,7 @@ function Detail({ j, toast, onStatus }: { j: Job | null; toast: (m: string) => v
   if (!j) return <div className="jobs-detail"><div className="empty"><Inbox /><b>选一条岗位查看详情</b><span>↑ ↓ 切换，Enter 用专用浏览器打开</span></div></div>;
   const v = verdictOf(j);
   const pub = publishedAgo(j.published_at);
+  const incomplete = !j.published_at || (j.description || "").length < 180;
   const facts: [string, string][] = [
     ["公司", j.company], ["地点", j.remote ? (j.city && j.city !== "远程" ? `${j.city}（可远程）` : "远程") : j.city],
     ["薪资", j.salary], ["类型", JOB_TYPE_LABEL[j.job_type] || ""], ["经验", j.experience], ["学历", j.education],
@@ -309,6 +310,7 @@ function Detail({ j, toast, onStatus }: { j: Job | null; toast: (m: string) => v
       </div>
 
       <div className="d-scroll">
+        {incomplete && <div className="quality-note">待核验：{!j.published_at ? "发布时间未知。" : ""}{(j.description || "").length < 180 ? "正文尚不完整。" : ""}请核实原页面后再决定是否投递。</div>}
         {(j.verdict_reason || j.ai_summary) && (
           <section className={`d-ai ${v.cls}`}>
             <b><Sparkles size={14} />{j.verdict === "no" ? "AI 判为不合适" : j.verdict ? `AI：${v.label}` : "AI"}{j.score != null && <span className="faint">　匹配 {j.score}</span>}</b>
@@ -333,7 +335,7 @@ function Detail({ j, toast, onStatus }: { j: Job | null; toast: (m: string) => v
             <h3 className="d-h3">原文</h3>
             <div className="d-desc">{j.description}</div>
             <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>
-              这里是列表页上能拿到的内容，可能不完整；完整职位描述请打开原页面。最后看到这个岗位：{localDate(new Date(j.last_seen))}
+              这里保留已采集的正文；部分平台仅提供列表摘要，可打开原页面核实。最后看到这个岗位：{localDate(new Date(j.last_seen))}
             </p>
           </section>
         )}

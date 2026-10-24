@@ -23,7 +23,8 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
   };
   const run = async (s: Source) => {
     try {
-      await api.runNow(s.id);
+      const result=await api.runNow(s.id);
+      if (!result.started.length) { toast('没有启动新任务：该信源正在运行或已达到今日全局预算'); return; }
       toast(s.browser ? `${s.name} 已加入浏览器队列，前面有任务时会稍等` : `开始检索 ${s.name}`);
       refresh();
     } catch (e) { toast((e as Error).message); }
@@ -76,6 +77,8 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
                         <span className="row" style={{ gap: 6, fontSize: 13 }}><i className={`dot ${m.dot}`} /><span className="muted">{m.label}</span></span>
                       </div>
                       <div className="desc">{s.note}</div>
+                      {s.progress && <div className="desc">{s.progress.message}</div>}
+                      <div className="desc">今日全局次数 {s.daily_used ?? 0} / {s.daily_cap ?? '—'} · 多个方案共用平台访问预算</div>
                       <div className="stat">
                         <span>上次 {lr ? timeAgo(lr.finished_at || lr.started_at) : "—"}{lr?.ok ? `，找到 ${lr.found} 条，新增 ${lr.added} 条` : ""}</span>
                         <span>下次 {!overview.running ? "自动检索已关闭" : s.night_now ? "夜间暂停中" : s.next_run ? untilLabel(s.next_run) : "即将开始"}</span>

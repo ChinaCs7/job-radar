@@ -19,12 +19,14 @@ interface Msg {
 
 const KEY = "jr-chat";
 const SUGGEST = [
-  "根据我的简历，帮我设置搜索条件",
+  "列出我当前的全部求职方案",
+  "根据我的简历，创建适合我的求职方案",
   "今天最适合我的 3 个岗位是哪些？",
   "收藏的岗位帮我比较一下",
   "各个信源最近表现怎么样？",
 ];
 const TOOL_LABEL: Record<string, string> = {
+  list_plans: "列出方案", get_plan: "读取方案", create_plan: "创建方案", update_plan: "编辑方案", manage_plan: "管理方案", run_plan: "启动方案检索", cancel_plan: "取消任务", plan_progress: "检查进度", search_plan_jobs: "查询方案岗位",
   search_jobs: "查岗位", get_job: "看详情", get_stats: "看统计", get_settings: "看当前设置", propose_settings: "提出修改方案",
 };
 
@@ -83,6 +85,7 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
     setMsgs(next); setDraft(""); setAtt(null); setBusy("ask");
     try {
       const r = await api.assistant(next.filter((m) => !m.error).map(toWire));
+      refresh();
       setMsgs([...next, { role: "assistant", content: r.reply, steps: r.steps, proposals: r.proposals?.map((p) => ({ ...p, state: "pending" })) }]);
     } catch (e) {
       setMsgs([...next, { role: "assistant", content: (e as Error).message, error: true }]);
@@ -116,10 +119,10 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
 
   const applyProposal = async (p: Proposal, andRun: boolean) => {
     try {
-      await api.applyProposal(p.proposal_id);
+      const applied = await api.applyProposal(p.proposal_id);
       setProposalState(p.proposal_id, "applied");
       if (andRun) {
-        const r = await api.runNow();
+        const r = await api.runNow(undefined, applied.plan_id);
         toast(`已应用，开始检索 ${r.started.length} 个信源`);
       } else toast("已应用新的搜索条件，下一轮检索生效");
       refresh();
@@ -147,8 +150,8 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
     <div className="chat">
       <div className="chat-head">
         <div className="page-head">
-          <div className="grow"><h1>AI 助手</h1>
-            <p>能查已经收集的岗位，也能根据你的简历和需求提出搜索条件；改设置前会先给你确认。</p></div>
+          <div className="grow"><h1>指挥助手</h1>
+            <p>描述目标或上传简历，让助手创建、编辑、归档方案，启动检索并检查进度。</p></div>
           <button className="btn" onClick={summary} disabled={!!busy} title="总结今天值得看的岗位；今天没有就总结最近 7 天">
             {busy === "summary" ? <Loader2 className="spin" /> : <Sparkles />}AI 总结</button>
           {msgs.length > 0 && <button className="btn ghost icon" title="清空对话" aria-label="清空对话" onClick={() => setMsgs([])}><Trash2 /></button>}
@@ -159,8 +162,8 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
           {msgs.length === 0 && !busy && (
             <div className="chat-empty">
               <Sparkles />
-              <b>问岗位，或者让它帮你设置</b>
-              <span>点输入框左边的 <Paperclip size={13} style={{ verticalAlign: -2 }} /> 上传简历，再说说想找什么，它会提出一套搜索条件给你确认。</span>
+              <b>从一个求职目标开始</b>
+              <span>点输入框左边的 <Paperclip size={13} style={{ verticalAlign: -2 }} /> 上传简历，再说说想找什么，它可以把不同方向和城市整理成独立方案。</span>
               <div className="suggest">{SUGGEST.map((s) => (
                 <button key={s} className="chip" onClick={() => (s.includes("简历") && !att ? fileRef.current?.click() : ask(s))}>{s}</button>
               ))}</div>
