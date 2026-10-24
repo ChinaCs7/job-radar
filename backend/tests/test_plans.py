@@ -20,6 +20,80 @@ from app.scheduler import Scheduler
 
 
 class PlanTests(unittest.TestCase):
+    def test_nowcoder_second_page_failure_preserves_first_page(self):
+        from app.collectors.nowcoder import Nowcoder
+        from app.collectors.base import CollectorError
+        class Visit:
+            last_response_meta={}
+            title='职位搜索';final_url='https://www.nowcoder.com/jobs/fulltime/center'
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+            next_json=AsyncMock(side_effect=[{'code':0},None])
+            html=AsyncMock(return_value='<html></html>')
+        with scope(self.p['id']),patch('app.collectors.nowcoder.browser.Visit',return_value=Visit()),patch('app.collectors.nowcoder.verified_jobs',return_value=([self.job],2)),patch('app.collectors.job51.next_page',new=AsyncMock(return_value=True)),patch('asyncio.sleep',new=AsyncMock()):
+            with self.assertRaises(CollectorError) as ctx:
+                asyncio.run(Nowcoder().collect({'keywords':['Python'],'cities':['厦门'],'job_types':['fulltime']},{'max_pages':2},{}))
+        self.assertEqual(ctx.exception.kind,'coverage')
+        self.assertEqual(ctx.exception.partial,[self.job])
+
+    def test_native_search_contracts_reject_wrong_query_city_page(self):
+        from app.collectors.job51 import verified_jobs,search_url
+        from app.collectors.base import CollectorError
+        response={'resultbody':{'job':{'items':[]}}}
+        meta={'query':{'keyword':'Python','jobArea':'110300','pageNum':'2','sortType':'1'}}
+        self.assertEqual(verified_jobs(response,meta,'Python','110300',2),[])
+        for key in ('keyword','jobArea','pageNum','sortType'):
+            bad=copy.deepcopy(meta);bad['query'][key]='wrong'
+            with self.assertRaises(CollectorError): verified_jobs(response,bad,'Python','110300',2)
+        self.assertEqual(search_url('Python','上海市')[1],'020000')
+        with self.assertRaises(CollectorError): search_url('Python','不存在城市')
+
+    def test_nowcoder_uses_creation_date_and_full_body(self):
+        from app.collectors.nowcoder import verified_jobs
+        from app.collectors.base import CollectorError
+        meta={'body':{'query':'Python','jobCity':['厦门'],'recruitType':'3','page':'1'}}
+        item={'id':12,'jobName':'Python开发','createTime':1577808000000,'refreshTime':1792800000000,
+              'ext':json.dumps({'infos':'工作职责','requirements':'岗位要求'}),'recruitType':3,'jobCity':'厦门'}
+        response={'code':0,'data':{'currentPage':1,'totalPage':2,'datas':[{'data':item}]}}
+        jobs,total=verified_jobs(response,meta,'Python','厦门',3,1)
+        self.assertEqual(total,2);self.assertEqual(jobs[0].description,'工作职责\n岗位要求')
+        self.assertTrue(jobs[0].published_at.startswith('2020-01-01'))
+        with self.assertRaises(CollectorError): verified_jobs(response,meta,'Python','厦门',3,2)
+        with self.assertRaises(CollectorError): verified_jobs(response,meta,'Python','上海',3,1)
+
+    def test_zhilian_does_not_accept_nationwide_for_city(self):
+        from app.collectors.webpages import verified_zhilian
+        from app.collectors.base import CollectorError
+        state={'queryParams':{'kw':'Python','jl':'682'},'positionList':[]}
+        html='<script>window.__INITIAL_STATE__='+json.dumps(state)+'</script>'
+        self.assertEqual(verified_zhilian(html,'Python',{'cities':['厦门']}),[])
+        with self.assertRaises(CollectorError): verified_zhilian(html.replace('682','489'),'Python',{'cities':['厦门']})
+
+    def test_harvest_context_stays_inside_result_card(self):
+        from app.collectors.webpages import harvest
+        html='<div><div class="card"><a href="/jobs/1">A</a>甲公司</div><div class="card"><a href="/jobs/2">B</a>乙公司</div></div>'
+        jobs=harvest(html,'https://example.com',r'/jobs/',container_xpath='//div[@class="card"]')
+        self.assertEqual(len(jobs),2)
+        self.assertNotIn('乙',jobs[0][2]);self.assertNotIn('甲',jobs[1][2])
+
+    def test_search_budget_rotates_cities_and_sites(self):
+        from app.collectors.websearch import search_queries
+        queries=search_queries({'keywords':['销售','策划'],'cities':['上海','厦门']},['nowcoder.com'])
+        self.assertEqual(len(queries),8)
+        self.assertTrue(all(not ('上海' in q and '厦门' in q) for q in queries))
+        with scope(self.p['id']):
+            first=plans.rotate('bing',queries,3);second=plans.rotate('bing',queries,3);third=plans.rotate('bing',queries,3)
+        self.assertEqual(set(first+second+third),set(queries))
+
+    def test_company_partial_failure_keeps_successes(self):
+        from app.collectors.companies import Companies
+        from app.collectors.base import CollectorError
+        cfg={'companies':[{'name':'有效公司','type':'tencent'},{'name':'不支持公司','type':'unknown'}]}
+        with patch.object(Companies,'_tencent',new=AsyncMock(return_value=[self.job])),patch('app.collectors.companies.asyncio.sleep',new=AsyncMock()):
+            with self.assertRaises(CollectorError) as ctx:
+                asyncio.run(Companies().collect({'keywords':['Python']},cfg,{}))
+        self.assertEqual(ctx.exception.kind,'partial');self.assertEqual(ctx.exception.partial,[self.job])
+
     def test_known_old_post_filtered_before_ai(self):
         from app.collectors import REGISTRY
         self.job.needs_enrich=True

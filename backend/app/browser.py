@@ -225,6 +225,7 @@ class Visit:
         self._bodies: asyncio.Queue = asyncio.Queue()
         self._response_meta = {}
         self.last_response_meta = {}
+        self._request_params = {}
 
     async def __aenter__(self):
         self._slot = browser_slot()
@@ -263,13 +264,28 @@ class Visit:
         while True:
             ev = await self.page.events.get()
             m, p = ev["method"], ev.get("params", {})
+            if m == 'Network.requestWillBeSent' and self.capture and self.capture.search(p.get('request',{}).get('url','')):
+                try:
+                    from urllib.parse import parse_qs
+                    raw=p['request'].get('postData') or '{}'
+                    try: body=json.loads(raw)
+                    except ValueError:
+                        body={k:v[0] for k,v in parse_qs(raw).items()}
+                        for key in ('jobCity',):
+                            if key in body:
+                                try: body[key]=json.loads(body[key])
+                                except ValueError: body[key]=[body[key]]
+                    self._request_params[p['requestId']]={k:body[k] for k in ('query','jobCity','recruitType','page','pageSize','latest') if k in body}
+                except (ValueError,TypeError):
+                    pass
             if m == "Page.frameNavigated" and not p.get("frame", {}).get("parentId"):
                 self.final_url = p["frame"].get("url", "")
             elif m == "Network.responseReceived" and self.capture and self.capture.search(p.get("response", {}).get("url", "")):
                 self._pending.add(p["requestId"])
                 from urllib.parse import urlparse,parse_qs
                 url=urlparse(p['response']['url'])
-                self._response_meta[p['requestId']]={'path':url.path,'query':{k:v[0] for k,v in parse_qs(url.query).items() if k in ('query','offset','sortby','page','city')}}
+                self._response_meta[p['requestId']]={'path':url.path,'query':{k:v[0] for k,v in parse_qs(url.query).items() if k in ('query','offset','sortby','page','city','keyword','jobArea','pageNum','searchType','sortType','pageSize')}}
+                self._response_meta[p['requestId']]['body']=self._request_params.pop(p['requestId'],{})
             elif m == "Network.loadingFinished" and p.get("requestId") in self._pending:
                 self._pending.discard(p["requestId"])
                 try:
