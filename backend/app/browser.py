@@ -223,6 +223,8 @@ class Visit:
         self.title = ""
         self._pending: set[str] = set()
         self._bodies: asyncio.Queue = asyncio.Queue()
+        self._response_meta = {}
+        self.last_response_meta = {}
 
     async def __aenter__(self):
         self._slot = browser_slot()
@@ -265,6 +267,9 @@ class Visit:
                 self.final_url = p["frame"].get("url", "")
             elif m == "Network.responseReceived" and self.capture and self.capture.search(p.get("response", {}).get("url", "")):
                 self._pending.add(p["requestId"])
+                from urllib.parse import urlparse,parse_qs
+                url=urlparse(p['response']['url'])
+                self._response_meta[p['requestId']]={'path':url.path,'query':{k:v[0] for k,v in parse_qs(url.query).items() if k in ('query','offset','sortby','page','city')}}
             elif m == "Network.loadingFinished" and p.get("requestId") in self._pending:
                 self._pending.discard(p["requestId"])
                 try:
@@ -272,13 +277,14 @@ class Visit:
                     text = body.get("body", "")
                     if body.get("base64Encoded"):
                         text = base64.b64decode(text).decode("utf-8", "replace")
-                    await self._bodies.put(json.loads(text))
+                    await self._bodies.put((json.loads(text),self._response_meta.pop(p['requestId'],{})))
                 except Exception:
                     pass
 
     async def next_json(self, timeout: float = 20) -> Any | None:
         try:
-            return await asyncio.wait_for(self._bodies.get(), timeout)
+            data,self.last_response_meta=await asyncio.wait_for(self._bodies.get(), timeout)
+            return data
         except asyncio.TimeoutError:
             return None
 

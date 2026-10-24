@@ -202,6 +202,63 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(classify({'code':0,'zpData':{'jobList':[]}})[0],'empty')
         self.assertEqual(classify({'code':0,'zpData':{'jobList':[{'salaryDesc':''}]}})[0],'ok')
 
+    def test_maimai_structured_posts_preserve_date_and_exclude_account_data(self):
+        from app.collectors.maimai import initial_data,parse_posts
+        data={'keyword':'Python 招聘','type':'gossip','gossips':[{'gossip':{'id':'123','egid':'public-post-id','text':'招聘 Python 工程师\n负责后台服务。','crtime':'2026-10-20 12:30:00'}}],'more':0}
+        html='<script>share_data = JSON.parse('+json.dumps(json.dumps({'data':data,'auth_info':{'token':'must-not-persist'}}))+');</script>'
+        jobs=parse_posts(initial_data(html,'Python 招聘'))
+        self.assertEqual(jobs[0].external_id,'123')
+        self.assertEqual(jobs[0].published_at,'2026-10-20 12:30:00')
+        self.assertIn('gid=123',jobs[0].url)
+        self.assertNotIn('must-not-persist',repr(jobs))
+        with self.assertRaises(execution.CollectorError): initial_data(html,'Java 招聘')
+
+    def test_maimai_missing_list_is_not_empty_success(self):
+        from app.collectors.maimai import parse_posts
+        with self.assertRaises(execution.CollectorError): parse_posts({'error':'login'})
+        self.assertEqual(parse_posts({'gossips':[]}),[])
+
+    def test_liepin_city_and_page_are_explicit(self):
+        from app.collectors.liepin import search_url
+        from urllib.parse import urlparse,parse_qs
+        url,code=search_url('Python','厦门市',1)
+        self.assertEqual(code,'090040')
+        self.assertEqual(parse_qs(urlparse(url).query)['currentPage'],['1'])
+        with self.assertRaises(execution.CollectorError): search_url('Python','不存在的城市',0)
+
+    def test_liepin_rejects_nationwide_and_wrong_page(self):
+        from app.collectors.liepin import verified_jobs
+        response={'data':{'data':{'jobCardList':[],'jobSubscribeInfo':{'keyword':'Python','dqCode':'410'}},'pagination':{'currentPage':0}}}
+        with self.assertRaises(execution.CollectorError): verified_jobs(response,'Python','090040',0)
+        response['data']['data']['jobSubscribeInfo']['dqCode']='090040'
+        with self.assertRaises(execution.CollectorError): verified_jobs(response,'Python','090040',1)
+        self.assertEqual(verified_jobs(response,'Python','090040',0)[0],[])
+        self.assertIsNone(verified_jobs({'data':{'pubTimes':[]}},'Python','090040',0))
+
+    def test_browser_capture_metadata_excludes_tokens(self):
+        from app.browser import Visit
+        from types import SimpleNamespace
+        async def check():
+            visit=Visit('https://example.test',capture='/search/gossips')
+            visit.page=SimpleNamespace(events=asyncio.Queue(),send=AsyncMock(return_value={'body':'{"data":{}}'}))
+            visit.page.events.put_nowait({'method':'Network.responseReceived','params':{'requestId':'1','response':{'url':'https://example.test/search/gossips?query=Python&offset=20&sortby=time&token=secret'}}})
+            visit.page.events.put_nowait({'method':'Network.loadingFinished','params':{'requestId':'1'}})
+            task=asyncio.create_task(visit._watch())
+            try:
+                self.assertEqual(await visit.next_json(1),{'data':{}})
+                self.assertEqual(visit.last_response_meta['query'],{'query':'Python','offset':'20','sortby':'time'})
+            finally:
+                task.cancel();await asyncio.gather(task,return_exceptions=True)
+        asyncio.run(check())
+
+    def test_maimai_seeking_and_old_posts_filtered_before_ai(self):
+        from app.collectors.maimai import parse_posts
+        jobs=parse_posts({'gossips':[{'gossip':{'id':'seeking','text':'求内推，Python 开发','crtime':'2026-10-24 12:00:00'}},{'gossip':{'id':'old','text':'招聘 Python 开发','crtime':'2020-10-24 12:00:00'}}]})
+        with scope(self.p['id']),patch.object(execution.REGISTRY['maimai'],'collect',AsyncMock(return_value=jobs)):
+            result=asyncio.run(execution.run_source('maimai'))
+            self.assertEqual(result['kept'],0)
+            self.assertEqual(db.jobs_to_enrich(),[])
+
     def test_boss_capture_ignores_wrong_query_and_page(self):
         from app.collectors.boss import _Capture,JOBLIST
         from types import SimpleNamespace

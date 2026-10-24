@@ -17,6 +17,13 @@ _REMOTE = re.compile(r"远程|居家|在家办公|线上办公|可远程|remote|
 
 def passes(j: dict, c: dict) -> tuple[bool, str]:
     """j 是 Job 的字段字典（入库前）或数据库行（整理后），两者字段名一致。"""
+    import json
+    raw=j.get('raw') or {}
+    if isinstance(raw,str):
+        try: raw=json.loads(raw)
+        except ValueError: raw={}
+    if isinstance(raw,dict) and raw.get('content_kind')=='job_seeking':
+        return False,'个人求职或求内推帖，不是招聘岗位'
     text = f"{j.get('title', '')} {j.get('company', '')}"
     for w in c.get("exclude") or []:
         if w and w.lower() in text.lower():

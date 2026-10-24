@@ -274,7 +274,7 @@ SITES: dict[str, Site] = {s.id: s for s in [
          note="需要登录", needs_login=True, home="https://weibo.com/login.php",
          href=r"weibo\.com/\d+/[A-Za-z0-9]{8,}", login=("passport.weibo", "login"), suffix=" 招聘", enabled=False),
     Site("maimai", "脉脉", "媒体平台", lambda k, c: f"https://maimai.cn/web/search_center?type=gossip&query={quote(k)}",
-         note="实验性：职言区帖子没有独立链接、且多为求职帖，暂时拿不到数据", needs_login=True, home="https://maimai.cn/platform/login",
+         note="由脉脉专用采集器读取职言正文和发帖时间，需要登录", needs_login=True, home="https://maimai.cn/platform/login",
          href=r"maimai\.cn/web/(gossip_detail|feed_detail)", login=("platform/login",), suffix=" 内推", enabled=False),
     Site("jike", "即刻", "媒体平台", lambda k, c: f"https://web.okjike.com/search?keyword={quote(k)}",
          note="需要登录", needs_login=True, home="https://web.okjike.com/login",
