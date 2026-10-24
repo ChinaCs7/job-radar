@@ -40,6 +40,7 @@ async def run_source(source_id: str) -> dict:
     db.log('info',f'开始检索 {REGISTRY[source_id].info.name} · {p["name"]}',source_id)
     try:
         async with _locks.setdefault(source_id,asyncio.Lock()):
+            before_ids={r[0] for r in db.conn().execute('SELECT id FROM jobs WHERE source=?',(source_id,))}
             if plans.get(pid)['state']!='active': raise CollectorError('config','方案已归档，已停止本次任务')
             # Reuse a recent identical search across plans; personal profile and evaluation preferences are excluded.
             search={k:crit[k] for k in ('keywords','cities','regions','job_types')}
@@ -70,7 +71,8 @@ async def run_source(source_id: str) -> dict:
         for j in jobs:
             if not j.remote and _REMOTE.search(j.title+' '+' '.join(j.tags)): j.remote=True
             if j.salary_min_k is None: j.salary_min_k=parse_salary_min_k(j.salary)
-        added=db.upsert_jobs(jobs)
+        db.upsert_jobs(jobs)
+        added=[j.id for j in jobs if j.id not in before_ids]
         kept=0
         for j in jobs:
             row=db.get_job(j.id)

@@ -196,6 +196,81 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(result['description'],'负责 Python 服务开发')
         self.assertEqual(result['published_at'],'2026-10-24')
 
+    def test_boss_response_contract(self):
+        from app.collectors.boss import classify
+        self.assertEqual(classify({'code':0,'zpData':{}})[0],'error')
+        self.assertEqual(classify({'code':0,'zpData':{'jobList':[]}})[0],'empty')
+        self.assertEqual(classify({'code':0,'zpData':{'jobList':[{'salaryDesc':''}]}})[0],'ok')
+
+    def test_boss_capture_ignores_wrong_query_and_page(self):
+        from app.collectors.boss import _Capture,JOBLIST
+        from types import SimpleNamespace
+        async def check():
+            page=SimpleNamespace(events=asyncio.Queue(),send=AsyncMock(return_value={'body':'{"code":0}'}))
+            cap=_Capture(page);cap.expect('Python','101230200',2)
+            for rid,query,number in [('wrong','Java',2),('old','Python',1),('right','Python',2)]:
+                url=f'https://www.zhipin.com{JOBLIST}?query={query}&city=101230200&page={number}'
+                request={'url':url} if rid!='right' else {'url':url.split('?')[0],'postData':f'query={query}&city=101230200&page={number}'}
+                for method,params in [('Network.requestWillBeSent',{'requestId':rid,'request':request}),('Network.responseReceived',{'requestId':rid,'response':{'url':url}}),('Network.loadingFinished',{'requestId':rid})]:
+                    page.events.put_nowait({'method':method,'params':params})
+            self.assertEqual(await cap.next(1),{'code':0})
+            page.send.assert_awaited_once_with('Network.getResponseBody',{'requestId':'right'})
+        asyncio.run(check())
+
+    def test_boss_checkpoint_and_detail_backoff(self):
+        from app.collectors import boss_state as state
+        with scope(self.p['id']):
+            sig,start,head=state.page_start('Python','101230200')
+            self.assertEqual(start,1)
+            state.page_saved(sig,1,True)
+            self.assertEqual(state.page_start('Python','101230200')[1],2)
+            state.enqueue([self.job])
+            self.assertEqual(len(state.pending(1)),1)
+            state.detail_done(self.job.id,False,'没有正文')
+            self.assertEqual(state.pending(1),[])
+            row=db.conn().execute('SELECT * FROM boss_details WHERE job_id=?',(self.job.id,)).fetchone()
+            self.assertEqual(row['attempts'],1)
+        with scope(self.q['id']):
+            self.assertEqual(state.page_start('Python','101230200')[1],1)
+            self.assertEqual(state.pending(1),[])
+
+    def test_boss_replay_does_not_move_checkpoint_backwards(self):
+        from app.collectors import boss_state as state
+        with scope(self.p['id']):
+            sig,_,_=state.page_start('Python','101230200')
+            state.page_saved(sig,4,True)
+            state.page_saved(sig,1,True,head=True)
+            self.assertEqual(state.page_start('Python','101230200')[1],5)
+
+    def test_boss_ineligible_detail_does_not_use_budget(self):
+        from app.collectors import boss_state as state
+        with scope(self.p['id']):
+            other=copy.deepcopy(self.job);other.external_id+='other';other.city='北京'
+            state.enqueue([other,self.job])
+            pending=state.pending(1,plans.get()['criteria'])
+            self.assertEqual([job.id for job,_ in pending],[self.job.id])
+
+    def test_job_type_from_detail_is_saved(self):
+        with scope(self.p['id']):
+            self.job.job_type=''
+            db.upsert_jobs([self.job])
+            self.job.job_type='fulltime'
+            db.upsert_jobs([self.job])
+            self.assertEqual(db.get_job(self.job.id)['job_type'],'fulltime')
+
+    def test_boss_page_saved_before_later_timeout(self):
+        from app.collectors import boss
+        from contextlib import asynccontextmanager
+        from types import SimpleNamespace
+        @asynccontextmanager
+        async def context(): yield SimpleNamespace(send=AsyncMock())
+        data={'code':0,'zpData':{'jobList':[{'encryptJobId':'checkpoint-test','jobName':'Python','cityName':'厦门'}],'hasMore':True}}
+        with scope(self.p['id']),patch.object(boss.browser,'browser_slot',context),patch.object(boss.browser,'CDPPage',context),patch.object(boss._Capture,'next',AsyncMock(side_effect=[data,None,None])),patch.object(boss,'_human_scroll',AsyncMock()),patch.object(boss.asyncio,'sleep',AsyncMock()):
+            result=asyncio.run(execution.run_source('boss'))
+            self.assertFalse(result['ok']);self.assertEqual(result['kind'],'coverage')
+            self.assertEqual(result['added'],1)
+            self.assertIsNotNone(db.get_job(boss.map_job(data['zpData']['jobList'][0]).id))
+
     def test_api_scope_crud_and_batch(self):
         from fastapi.testclient import TestClient
         from app.main import app

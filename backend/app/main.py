@@ -159,6 +159,15 @@ def sources():
     return list(scheduler.status().values())
 
 
+@app.get('/api/boss/coverage')
+def boss_coverage():
+    from .collectors import boss_state
+    boss_state.init()
+    rows=db.conn().execute('SELECT at,payload FROM boss_receipts WHERE plan_id=? ORDER BY id DESC LIMIT 10',
+                          (current_plan.get() or 'legacy',)).fetchall()
+    return [{'at':r['at'],**json.loads(r['payload'])} for r in rows]
+
+
 @app.post("/api/run")
 async def run_now(body: dict = Body(default={})):
     # 必须是 async：检索任务要建在主事件循环上（同步接口跑在线程池里，没有事件循环）

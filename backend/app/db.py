@@ -193,7 +193,7 @@ def upsert_jobs(jobs: list[Job]) -> list[str]:
                     c.execute('UPDATE jobs SET last_seen=? WHERE id=?',(t,j.id))
                     attach_job(j.id,t)
                     continue
-                fields = {k:getattr(j,k) for k in ('title','company','city','salary','salary_min_k','description','published_at','experience','education')
+                fields = {k:getattr(j,k) for k in ('title','company','city','salary','salary_min_k','description','published_at','experience','education','job_type')
                           if getattr(j,k) and getattr(j,k) != old[k]}
                 # Do not overwrite a completed detail with a shorter list snippet.
                 if len(j.description) < len(old['description'] or ''):
