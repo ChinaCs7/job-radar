@@ -95,8 +95,8 @@ export default function Overview({ overview, refresh, go, toast }: PageProps) {
       {overview && !overview.has_key && overview.has_keywords && (
         <div className="notice">
           <Info className="faint" />
-          <div className="grow muted">还没有填 DeepSeek key：岗位不会被 AI 整理字段和打匹配分，社区帖子只显示原文，全网搜索也用不了。</div>
-          <button className="btn sm" onClick={() => go("accounts")}>去填写</button>
+          <div className="grow muted">基础功能可直接使用：方案、检索、去重、条件筛选和岗位管理均不需要 key。AI 整理、评分、聊天助手和 DeepSeek 付费搜索为可选功能；免费必应搜索照常可用。</div>
+          <button className="btn sm" onClick={() => go("accounts")}>配置可选 AI</button>
         </div>
       )}
 

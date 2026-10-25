@@ -48,6 +48,8 @@ class Scheduler:
         if p['state']!='active': raise ValueError('方案已归档或删除，请先恢复')
         if not p['criteria']['keywords']: raise ValueError('请先填写方案关键词')
         if not cfg.get('enabled'): raise ValueError('当前方案没有启用这个信源')
+        if REGISTRY[sid].info.needs_key and not s['llm'].get('api_key'):
+            raise ValueError('此可选信源需要 DeepSeek key；基础检索和免费必应搜索不需要')
         if cfg.get('paused'): raise ValueError('该平台需要登录或验证，请先处理后恢复')
         if not self.region_wanted(s,sid): return False
         reserved=sum(1 for k in self.tasks if k[1]==sid)
@@ -79,6 +81,9 @@ class Scheduler:
         s=load_settings(); started=[]
         for sid,cfg in s['sources'].items():
             if sid in REGISTRY and cfg.get('enabled') and not cfg.get('paused'):
+                if REGISTRY[sid].info.needs_key and not s['llm'].get('api_key'):
+                    db.log('info',f'跳过可选信源 {REGISTRY[sid].info.name}：未配置 key，其他信源照常检索',sid)
+                    continue
                 if self.trigger(sid): started.append(sid)
         return started
 
@@ -97,6 +102,7 @@ class Scheduler:
                         s=load_settings(); now=datetime.now()
                         for sid,cfg in s['sources'].items():
                             if sid not in REGISTRY or not cfg.get('enabled') or cfg.get('paused'): continue
+                            if REGISTRY[sid].info.needs_key and not s['llm'].get('api_key'): continue
                             if cfg.get('night_pause') and self.in_night(s,now): continue
                             key=(p['id'],sid)
                             if key not in self.next_run:

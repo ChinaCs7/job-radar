@@ -85,7 +85,8 @@ async def run_source(source_id: str) -> dict:
         kept=0
         for j in jobs:
             row=db.get_job(j.id)
-            ok,why=passes(row,crit) if not j.needs_enrich or row['enriched'] else (True,'')
+            # Known facts are filtered even without AI; missing fields remain unknown.
+            ok,why=passes(row,crit)
             if j.raw.get('content_kind')=='job_seeking':
                 ok,why=False,'个人求职或求内推帖，不是招聘岗位'
             age=age_days(row.get('published_at') or '')

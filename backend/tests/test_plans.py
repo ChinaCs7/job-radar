@@ -20,6 +20,30 @@ from app.scheduler import Scheduler
 
 
 class PlanTests(unittest.TestCase):
+    def test_keyless_batch_skips_optional_paid_source(self):
+        save_global_settings({'llm':{'api_key':''}})
+        scheduler=Scheduler()
+        with scope(self.p['id']):
+            save_settings({'sources':{'websearch':{'enabled':True},'boss':{'enabled':True},'bing':{'enabled':True}}})
+            with patch.object(scheduler,'trigger',return_value=True) as trigger:
+                started=scheduler.run_all_now()
+            self.assertIn('boss',started);self.assertIn('bing',started)
+            self.assertNotIn('websearch',started)
+            self.assertNotIn(('websearch',),[c.args for c in trigger.call_args_list])
+
+    def test_keyless_collection_filtering_and_manual_status(self):
+        from app.collectors import REGISTRY
+        save_global_settings({'llm':{'api_key':''}})
+        bad=copy.deepcopy(self.job);bad.external_id+='-other';bad.city='上海';bad.needs_enrich=True
+        with scope(self.p['id']),patch.object(REGISTRY['boss'],'collect',new=AsyncMock(return_value=[self.job,bad])),patch.object(llm,'enrich',new=AsyncMock()) as ai:
+            result=asyncio.run(execution.run_source('boss'))
+            self.assertTrue(result['ok']);self.assertEqual(result['kept'],1)
+            self.assertEqual(asyncio.run(execution.enrich_pending()),0);ai.assert_not_called()
+            self.assertEqual(db.get_job(bad.id)['status'],'filtered')
+            self.assertIn(self.job.id,[j['id'] for j in db.query_jobs()])
+            db.update_job(self.job.id,{'status':'starred'})
+            self.assertEqual(db.get_job(self.job.id)['status'],'starred')
+
     def test_browser_queue_does_not_spend_collection_budget(self):
         from app import browser,collection_budget
         async def check():

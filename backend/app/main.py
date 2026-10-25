@@ -26,6 +26,7 @@ from .scheduler import scheduler
 
 UI_DIST = Path(os.getenv("JOB_RADAR_UI") or Path(__file__).resolve().parents[2] / "ui" / "dist")
 SUMMARY_PATH = DATA_DIR / "summaries.json"
+SERVICE_STARTED_AT = datetime.now().isoformat(timespec='seconds')
 
 
 @asynccontextmanager
@@ -127,7 +128,8 @@ def cancel_run(body: dict=Body(default={})):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "data_dir": str(DATA_DIR)}
+    return {"ok": True, "data_dir": str(DATA_DIR), "started_at": SERVICE_STARTED_AT,
+            "collection_timeout_mode": "active_time_excluding_browser_queue"}
 
 
 # ---------- 设置 ----------
