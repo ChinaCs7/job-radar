@@ -54,6 +54,8 @@ class Nowcoder(Collector):
         if not types: raise CollectorError('config','牛客目前支持全职社招和实习；不把校招结果充当兼职')
         combos=[(kw,c,t) for kw in keywords_of(criteria) for c in criteria.get('cities') or [''] for t in types]
         out={}
+        from ..collection_budget import track
+        track(out)
         try:
             for kw,city,kind in plans.rotate('nowcoder',combos,max(1,min(3,int(cfg.get('max_combos',2))))):
                 from .job51 import next_page

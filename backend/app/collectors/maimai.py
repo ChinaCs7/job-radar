@@ -55,7 +55,10 @@ class Maimai(Collector):
     async def collect(self,criteria,cfg,settings):
         from .webpages import WebPage,SITES
         from ..execution import progress
-        out={};max_pages=max(1,min(3,int(cfg.get('max_pages',2))))
+        out={}
+        from ..collection_budget import track
+        track(out)
+        max_pages=max(1,min(3,int(cfg.get('max_pages',2))))
         try:
             for keyword in plans.rotate('maimai',keywords_of(criteria),min(2,int(cfg.get('max_keywords',1)))):
                 query=keyword+' 招聘'

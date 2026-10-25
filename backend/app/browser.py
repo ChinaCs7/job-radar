@@ -178,20 +178,33 @@ class browser_slot:
     async def __aenter__(self):
         import random
         import time
-        global ACTIVE_SOURCE, ACTIVE_TASK
-        await BROWSER_LOCK.acquire()
-        wait = _last_release + random.uniform(*GAP_SECONDS) - time.monotonic()
-        ACTIVE_SOURCE = CURRENT_SOURCE.get()
+        from . import collection_budget
+        from .execution import progress
+        from .collectors.base import CollectorError
         from .plan_context import current_plan
-        ACTIVE_TASK = (current_plan.get() or 'legacy', ACTIVE_SOURCE)
+        global ACTIVE_SOURCE, ACTIVE_TASK
+        budget=collection_budget.current_budget.get()
+        acquired=False
+        if budget: budget.pause()
+        progress(CURRENT_SOURCE.get(),'queued','等待浏览器使用权；排队和访问间隔不计入采集时限')
         try:
-            if wait > 0:
-                await asyncio.sleep(wait)
-        except BaseException:
-            ACTIVE_SOURCE = ""
-            ACTIVE_TASK = None
-            BROWSER_LOCK.release()
+            async with asyncio.timeout(collection_budget.QUEUE_SECONDS):
+                await BROWSER_LOCK.acquire()
+                acquired=True
+                wait = _last_release + random.uniform(*GAP_SECONDS) - time.monotonic()
+                if wait > 0:
+                    progress(CURRENT_SOURCE.get(),'queued','等待平台访问间隔；稍后自动继续，无需重复点击')
+                    await asyncio.sleep(wait)
+            ACTIVE_SOURCE = CURRENT_SOURCE.get()
+            ACTIVE_TASK = (current_plan.get() or 'legacy', ACTIVE_SOURCE)
+            progress(ACTIVE_SOURCE,'loading','已取得浏览器，正在检索')
+        except BaseException as e:
+            if acquired: BROWSER_LOCK.release()
+            if isinstance(e,asyncio.TimeoutError):
+                raise CollectorError('queue_timeout','等待浏览器超过 30 分钟，本轮未完成',budget.jobs() if budget else []) from e
             raise
+        finally:
+            if budget: budget.resume()
         return self
 
     async def __aexit__(self, *exc):

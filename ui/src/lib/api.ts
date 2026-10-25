@@ -167,7 +167,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), 'X-Plan-ID':selectedPlan, ...init?.headers },
     });
-  } catch {
+  } catch (e) {
+    if ((e as Error).name === "TimeoutError") throw new ApiError("提交确认超时，请查看任务状态；请求可能已被接收，不要连续点击");
     throw new ApiError("连不上本地服务，请确认求职雷达正在运行");
   }
   if (!r.ok) {
@@ -194,7 +195,7 @@ export const api = {
   saveSettings: (patch: Partial<Settings> | Record<string, unknown>) =>
     req<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(patch) }),
   sources: () => req<Source[]>("/api/sources"),
-  runNow: (source?: string, planId?: string) => req<{ ok: boolean; started: string[] }>("/api/run", {...body({ source }),...(planId?{headers:{'X-Plan-ID':planId}}:{})}),
+  runNow: (source?: string, planId?: string) => req<{ ok: boolean; started: string[] }>("/api/run", {...body({ source }),signal:AbortSignal.timeout(20000),...(planId?{headers:{'X-Plan-ID':planId}}:{})}),
   setRunning: (running: boolean) => req<Settings>("/api/running", body({ running })),
   resume: (sid: string) => req(`/api/sources/${sid}/resume`, body({})),
   jobs: (params: Record<string, string | number | boolean | undefined>) => {

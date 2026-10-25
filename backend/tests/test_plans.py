@@ -20,6 +20,47 @@ from app.scheduler import Scheduler
 
 
 class PlanTests(unittest.TestCase):
+    def test_browser_queue_does_not_spend_collection_budget(self):
+        from app import browser,collection_budget
+        async def check():
+            lock=asyncio.Lock();await lock.acquire()
+            async def release():
+                await asyncio.sleep(.12);lock.release()
+            task=asyncio.create_task(release())
+            with patch.object(browser,'BROWSER_LOCK',lock),patch.object(browser,'GAP_SECONDS',(0,0)),patch.object(browser,'_last_release',0):
+                async with asyncio.timeout(.06) as timer:
+                    token=collection_budget.current_budget.set(collection_budget.Budget(timer))
+                    try:
+                        async with browser.browser_slot(): await asyncio.sleep(.01)
+                    finally: collection_budget.current_budget.reset(token)
+                self.assertFalse(lock.locked())
+            await task
+        asyncio.run(check())
+
+    def test_cancelled_browser_waiter_does_not_release_owner(self):
+        from app import browser
+        async def check():
+            lock=asyncio.Lock();await lock.acquire()
+            with patch.object(browser,'BROWSER_LOCK',lock),patch.object(browser,'ACTIVE_TASK',('other','boss')):
+                async def wait():
+                    async with browser.browser_slot(): pass
+                task=asyncio.create_task(wait());await asyncio.sleep(.01);task.cancel()
+                await asyncio.gather(task,return_exceptions=True)
+                self.assertTrue(lock.locked());self.assertEqual(browser.ACTIVE_TASK,('other','boss'))
+                lock.release()
+        asyncio.run(check())
+
+    def test_collection_timeout_saves_partial_results(self):
+        from app import collection_budget
+        from app.collectors import REGISTRY
+        async def collect(*args):
+            rows=[];collection_budget.track(rows);rows.append(self.job)
+            await asyncio.sleep(10)
+        with scope(self.p['id']),patch.object(REGISTRY['boss'],'collect',new=collect),patch.object(collection_budget,'ACTIVE_SECONDS',.02):
+            result=asyncio.run(execution.run_source('boss'))
+            self.assertEqual(result['kind'],'timeout');self.assertEqual(result['found'],1)
+            self.assertIsNotNone(db.get_job(self.job.id))
+
     def test_nowcoder_second_page_failure_preserves_first_page(self):
         from app.collectors.nowcoder import Nowcoder
         from app.collectors.base import CollectorError

@@ -35,7 +35,7 @@ export interface PageProps {
   overview: OverviewData | null;
   currentPlan: string;
   choosePlan: (id: string) => void;
-  refresh: () => void;
+  refresh: () => Promise<void>;
   go: (p: PageId) => void;
   toast: (m: string) => void;
 }
@@ -51,7 +51,9 @@ export default function App() {
 
   // 记住每个信源上一次看到的状态：从「检索中 / 排队中」变成别的状态，就说明这一轮跑完了，弹提示
   const prevStates = useRef<Record<string, string>>({});
+  const refreshSequence = useRef(0);
   const refresh = useCallback(() => {
+    const sequence=++refreshSequence.current;
     const requestedPlan=getSelectedPlan();
     api.plans(true).then(all => {
       const list=all.filter(p=>p.state!=='deleted');
@@ -62,8 +64,8 @@ export default function App() {
         else { setPage('plans'); setOverview(null); }
       }
     }).catch(() => {});
-    api.overview().then((o) => {
-      if (requestedPlan!==getSelectedPlan()) return;
+    return api.overview().then((o) => {
+      if (requestedPlan!==getSelectedPlan() || sequence!==refreshSequence.current) return;
       const prev = prevStates.current;
       for (const s of o.sources) {
         const was = prev[s.id];

@@ -37,7 +37,10 @@ class Liepin(Collector):
 
     async def collect(self,criteria,cfg,settings):
         from ..execution import progress
-        out={};pid=current_plan.get() or 'legacy';revision=plans.get()['revision']
+        out={}
+        from ..collection_budget import track
+        track(out)
+        pid=current_plan.get() or 'legacy';revision=plans.get()['revision']
         combinations=[(k,c) for k in keywords_of(criteria) for c in criteria.get('cities') or ['']]
         for keyword,city in combinations: search_url(keyword,city,0)
         try:

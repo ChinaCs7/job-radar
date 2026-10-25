@@ -202,6 +202,8 @@ class Boss(Collector):
         max_pages=max(1,min(3,int(cfg.get('max_pages',2))))
         revision=plans.get()['revision']
         out=[]
+        from ..collection_budget import track
+        track(out)
         evidence={'queries':[], 'detail_attempted':0,'detail_completed':0,'detail_failed':0,
                   'filters':'关键词与城市在请求中核验；薪资、类型、时效在本地筛选；未知字段待核验'}
         def save(jobs):

@@ -53,7 +53,16 @@ async def run_source(source_id: str) -> dict:
             else:
                 progress(source_id,'loading','正在访问平台；若需登录或验证会暂停')
                 try:
-                    jobs=await asyncio.wait_for(REGISTRY[source_id].collect(crit,cfg,s),timeout=600)
+                    from . import collection_budget
+                    budget=None
+                    try:
+                        async with asyncio.timeout(collection_budget.ACTIVE_SECONDS) as timer:
+                            budget=collection_budget.Budget(timer)
+                            token=collection_budget.current_budget.set(budget)
+                            try: jobs=await REGISTRY[source_id].collect(crit,cfg,s)
+                            finally: collection_budget.current_budget.reset(token)
+                    except asyncio.TimeoutError as e:
+                        raise CollectorError('timeout','实际采集达到时限（不含浏览器排队）；本轮未完成，已取得的候选会保留',budget.jobs() if budget else []) from e
                 except CollectorError as e:
                     if not e.partial: raise
                     jobs=e.partial

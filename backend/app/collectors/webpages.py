@@ -329,6 +329,8 @@ class WebPage(Collector):
 
     async def collect(self, criteria, cfg, settings):
         out=[]
+        from ..collection_budget import track
+        track(out)
         try:
             return await self._collect(criteria,cfg,settings,out)
         except CollectorError as e:
@@ -411,6 +413,8 @@ class BingSearch(Collector):
         from .. import plans
         queries=plans.rotate('bing',search_queries(criteria,sites),max(1,min(10,int(cfg.get('max_queries',10)))))
         out: list[Job] = []
+        from ..collection_budget import track
+        track(out)
         for q in queries:
             async with browser.Visit(f"https://cn.bing.com/search?q={quote(q)}&count=30", settle=3) as v:
                 html = await v.html()

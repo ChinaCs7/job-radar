@@ -55,6 +55,8 @@ class Job51(Collector):
         combos=[(k,c) for k in keywords_of(criteria) for c in criteria.get('cities') or ['']]
         for k,c in combos: search_url(k,c)
         out={}
+        from ..collection_budget import track
+        track(out)
         try:
             for kw,city in plans.rotate('51job',combos,max(1,min(3,int(cfg.get('max_combos',1))))):
                 url,code=search_url(kw,city)

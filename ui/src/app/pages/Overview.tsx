@@ -33,9 +33,9 @@ export default function Overview({ overview, refresh, go, toast }: PageProps) {
       const r = await api.runNow();
       const n = r.started.length;
       const browserN = r.started.filter((id) => overview?.sources.find((s) => s.id === id)?.browser).length;
-      toast(n ? `已开始检索 ${n} 个信源${browserN ? `，其中 ${browserN} 个用浏览器排队进行，约 ${Math.max(1, Math.round(browserN * 1.1))} 分钟` : ""}`
+      toast(n ? `已开始检索 ${n} 个信源${browserN ? `，其中 ${browserN} 个用浏览器排队进行` : ""}`
         : "没有可以检索的信源（都在跑、已暂停，或今天到了次数上限）");
-      refresh();
+      await refresh();
     } catch (e) { toast((e as Error).message); }
     finally { setKicking(false); }
   };
@@ -66,7 +66,7 @@ export default function Overview({ overview, refresh, go, toast }: PageProps) {
         <button className="btn" onClick={runNow} disabled={kicking || activeCount > 0 || !overview?.has_keywords}
           title={activeCount ? "正在检索，跑完再点" : "马上检索所有开启的信源"}>
           {kicking || activeCount > 0 ? <Loader2 className="spin" /> : <RefreshCw />}
-          {activeCount > 0 ? `检索中（${activeCount}）` : "立即检索"}
+          {kicking ? "正在提交…" : activeCount > 0 ? `进行中（${activeCount}）` : "立即检索"}
         </button>
         <button className="btn primary" onClick={() => go("jobs")}><BriefcaseBusiness />查看岗位</button>
       </div>

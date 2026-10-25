@@ -10,6 +10,7 @@ const intervalLabel = (m: number) => (m < 60 ? `${m} 分钟` : m < 1440 ? `${m /
 const JOBSPY_SITES = [["linkedin", "LinkedIn"], ["indeed", "Indeed"], ["google", "Google Jobs"], ["glassdoor", "Glassdoor"]] as const;
 
 export default function Sources({ overview, refresh, go, toast }: PageProps) {
+  const [submitting,setSubmitting] = useState<Record<string,boolean>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [night, setNight] = useState<{ start: number; end: number } | null>(null);
   useEffect(() => { api.settings().then((s) => setNight(s.night)); }, []);
@@ -22,12 +23,14 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
     catch (e) { toast((e as Error).message); }
   };
   const run = async (s: Source) => {
+    setSubmitting(v=>({...v,[s.id]:true}));
     try {
       const result=await api.runNow(s.id);
       if (!result.started.length) { toast('没有启动新任务：该信源正在运行或已达到今日全局预算'); return; }
       toast(s.browser ? `${s.name} 已加入浏览器队列，前面有任务时会稍等` : `开始检索 ${s.name}`);
-      refresh();
+      await refresh();
     } catch (e) { toast((e as Error).message); }
+    finally { setSubmitting(v=>({...v,[s.id]:false})); }
   };
   const resume = async (s: Source) => { await api.resume(s.id); toast(`${s.name} 已恢复，下一轮会继续检索`); refresh(); };
   const saveNight = async (n: { start: number; end: number }) => { setNight(n); await api.saveSettings({ night: n }); };
@@ -61,7 +64,8 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
             <div key={g}>
               <div className="group-title">{g}</div>
               {list.filter((s) => s.group === g).map((s) => {
-                const m = STATE_META[s.state];
+                const pending=!!submitting[s.id];
+                const m = pending ? {dot:"run",label:"提交中"} : STATE_META[s.state];
                 const lr = s.last_run;
                 const hasMore = ["jobspy", "websearch", "bing", "boss", "company"].includes(s.id);
                 return (
@@ -77,7 +81,7 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
                         <span className="row" style={{ gap: 6, fontSize: 13 }}><i className={`dot ${m.dot}`} /><span className="muted">{m.label}</span></span>
                       </div>
                       <div className="desc">{s.note}</div>
-                      {s.progress && <div className="desc">{s.progress.message}</div>}
+                      <div className="desc" role="status" aria-live="polite">{pending ? "正在提交检索请求…" : s.progress && s.state!=="error" ? s.progress.message : ""}</div>
                       <div className="desc">今日全局次数 {s.daily_used ?? 0} / {s.daily_cap ?? '—'} · 多个方案共用平台访问预算</div>
                       <div className="stat">
                         <span>上次 {lr ? timeAgo(lr.finished_at || lr.started_at) : "—"}{lr?.ok ? `，找到 ${lr.found} 条，新增 ${lr.added} 条` : ""}</span>
@@ -85,7 +89,7 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
                         <span>累计 {s.total} 条</span>
                       </div>
                       {s.state === "paused" && <div className="stat err">{s.config.paused_reason}</div>}
-                      {s.state === "error" && lr?.error && <div className="stat err">{lr.error}</div>}
+                      {!pending && s.state === "error" && lr?.error && <div className="stat err">{lr.error}</div>}
                     </div>
                     <div className="ctrl">
                       <select className="select" value={s.config.interval_min} aria-label={`${s.name} 检索间隔`}
@@ -101,7 +105,7 @@ export default function Sources({ overview, refresh, go, toast }: PageProps) {
                           <AsyncButton className="btn sm" icon={<RotateCcw />} onClick={() => resume(s)}>已处理，恢复</AsyncButton>
                         </>
                       ) : (
-                        <AsyncButton className="btn sm" disabled={!s.config.enabled || s.state === "running" || s.state === "queued"}
+                        <AsyncButton className="btn sm" busyLabel="提交中" style={{minWidth:88}} disabled={!s.config.enabled || s.state === "running" || s.state === "queued"}
                           icon={s.state === "running" || s.state === "queued" ? <Loader2 className="spin" /> : <Play />} onClick={() => run(s)}>
                           {s.state === "running" ? "检索中" : s.state === "queued" ? "排队中" : "检索"}
                         </AsyncButton>
