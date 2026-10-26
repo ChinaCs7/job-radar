@@ -25,6 +25,13 @@ SITE_LABELS = {
 }
 
 
+def search_queries(criteria,sites):
+    """Keep each city independent; rotate query budgets instead of truncating forever."""
+    cities=criteria.get('cities') or ['']
+    return list(dict.fromkeys(' '.join(x for x in (kw,'招聘',city,('site:'+site) if site else '') if x)
+        for kw in keywords_of(criteria) for city in cities for site in [*sites,'']))
+
+
 def site_label(url: str, fallback: str = "") -> str:
     host = urlparse(url).netloc.lower()
     for dom, name in SITE_LABELS.items():
@@ -41,15 +48,9 @@ class WebSearch(Collector):
         llm = settings["llm"]
         if not llm.get("api_key"):
             raise CollectorError("config", "全网搜索需要先在「账号与密钥」里填 DeepSeek API key")
-        kws = keywords_of(criteria)
-        cities = criteria.get("cities") or []
         sites = cfg.get("sites") or []
-        queries: list[str] = []
-        for kw in kws:
-            for s in sites:
-                queries.append(f"{kw} 招聘 site:{s}")
-            queries.append(f"{kw} 招聘 {' '.join(cities[:2])}".strip())
-        queries = queries[: int(cfg.get("max_queries", 12))]
+        from .. import plans
+        queries=plans.rotate('websearch',search_queries(criteria,sites),max(1,min(12,int(cfg.get('max_queries',12)))))
 
         out: list[Job] = []
         async with httpx.AsyncClient(timeout=30) as c:

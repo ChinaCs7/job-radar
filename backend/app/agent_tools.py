@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import io
+import json
+from . import db, plans
+from .plan_context import current_plan, scope
 import re
 import uuid
 import zipfile
@@ -76,7 +79,7 @@ def _clean_criteria(p: dict) -> dict:
             return None
         return [str(x).strip()[:40] for x in v if str(x).strip()][:n]
 
-    if v := strs(p.get("keywords"), 6):
+    if v := strs(p.get("keywords"), 30):
         out["keywords"] = v
     if (v := strs(p.get("cities"), 6)) is not None:
         out["cities"] = v
@@ -131,7 +134,10 @@ def propose(args: dict) -> dict:
     if not changes and not en and not dis:
         return {"ok": False, "message": "这个方案和当前设置完全一样，没有需要改的"}
     pid = uuid.uuid4().hex[:10]
-    _PROPOSALS[pid] = {"criteria": {c["field"]: crit[c["field"]] for c in changes}, "enable": en, "disable": dis}
+    payload={"criteria": {c["field"]: crit[c["field"]] for c in changes}, "enable": en, "disable": dis}
+    db.conn().execute('INSERT INTO proposals(id,plan_id,revision,payload,created_at) VALUES(?,?,?,?,?)',
+        (pid,current_plan.get(),plans.get()['revision'],json.dumps(payload,ensure_ascii=False),db.now()))
+    db.conn().commit()
     return {
         "ok": True, "proposal_id": pid, "changes": changes,
         "enable_sources": [REGISTRY[x].info.name for x in en], "disable_sources": [REGISTRY[x].info.name for x in dis],
@@ -141,18 +147,18 @@ def propose(args: dict) -> dict:
 
 
 def apply_proposal(pid: str) -> dict:
-    p = _PROPOSALS.pop(pid, None)
-    if not p:
-        raise KeyError("这个建议已经过期（应用重启过或已经处理），请让助手重新生成")
-    patch: dict = {"onboarded": True}
-    if p["criteria"]:
-        patch["criteria"] = p["criteria"]
-    src = {**{x: {"enabled": True} for x in p["enable"]}, **{x: {"enabled": False} for x in p["disable"]}}
-    if src:
-        patch["sources"] = src
-    save_settings(patch)
-    return {"ok": True}
+    with db._write_lock:
+        row=db.conn().execute("SELECT * FROM proposals WHERE id=? AND state='pending'",(pid,)).fetchone()
+        if not row: raise KeyError("这个建议已处理或不存在，请重新生成")
+        target=plans.get(row['plan_id'])
+        if target['revision']!=row['revision']: raise ValueError("方案已变化，这张建议卡已过期，请重新生成")
+        p=json.loads(row['payload'])
+        src={**{x:{'enabled':True} for x in p['enable']},**{x:{'enabled':False} for x in p['disable']}}
+        plans.update(target['id'],{'criteria':p['criteria'],'sources':src,'revision':row['revision']})
+        db.conn().execute("UPDATE proposals SET state='applied' WHERE id=?",(pid,)); db.conn().commit()
+    return {'ok':True,'plan_id':target['id']}
 
 
 def discard(pid: str) -> None:
-    _PROPOSALS.pop(pid, None)
+    db.conn().execute("UPDATE proposals SET state='discarded' WHERE id=? AND state='pending'",(pid,))
+    db.conn().commit()

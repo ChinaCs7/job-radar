@@ -136,7 +136,8 @@ class CDPPage:
         async for msg in self.ws:
             data = json.loads(msg)
             if "id" in data and data["id"] in self._pending:
-                self._pending.pop(data["id"]).set_result(data)
+                future = self._pending.pop(data["id"])
+                if not future.done(): future.set_result(data)
             elif "method" in data:
                 await self.events.put(data)
 
@@ -144,8 +145,12 @@ class CDPPage:
         self._id += 1
         fut = asyncio.get_running_loop().create_future()
         self._pending[self._id] = fut
-        await self.ws.send(json.dumps({"id": self._id, "method": method, "params": params or {}}))
-        res = await asyncio.wait_for(fut, timeout)
+        request_id = self._id
+        try:
+            await self.ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+            res = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._pending.pop(request_id, None)
         if "error" in res:
             raise RuntimeError(f"CDP {method}: {res['error'].get('message')}")
         return res.get("result", {})
@@ -161,6 +166,7 @@ BROWSER_LOCK = asyncio.Lock()
 import contextvars
 CURRENT_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar("current_source", default="")
 ACTIVE_SOURCE = ""
+ACTIVE_TASK = None
 # 两次打开网页之间至少隔这么久（秒，随机取）。多个信源同时到点时会一个一个来，不会连续猛刷
 GAP_SECONDS = (20, 45)
 _last_release = 0.0
@@ -172,19 +178,41 @@ class browser_slot:
     async def __aenter__(self):
         import random
         import time
-        global ACTIVE_SOURCE
-        await BROWSER_LOCK.acquire()
-        wait = _last_release + random.uniform(*GAP_SECONDS) - time.monotonic()
-        ACTIVE_SOURCE = CURRENT_SOURCE.get()
-        if wait > 0:
-            await asyncio.sleep(wait)
+        from . import collection_budget
+        from .execution import progress
+        from .collectors.base import CollectorError
+        from .plan_context import current_plan
+        global ACTIVE_SOURCE, ACTIVE_TASK
+        budget=collection_budget.current_budget.get()
+        acquired=False
+        if budget: budget.pause()
+        progress(CURRENT_SOURCE.get(),'queued','等待浏览器使用权；排队和访问间隔不计入采集时限')
+        try:
+            async with asyncio.timeout(collection_budget.QUEUE_SECONDS):
+                await BROWSER_LOCK.acquire()
+                acquired=True
+                wait = _last_release + random.uniform(*GAP_SECONDS) - time.monotonic()
+                if wait > 0:
+                    progress(CURRENT_SOURCE.get(),'queued','等待平台访问间隔；稍后自动继续，无需重复点击')
+                    await asyncio.sleep(wait)
+            ACTIVE_SOURCE = CURRENT_SOURCE.get()
+            ACTIVE_TASK = (current_plan.get() or 'legacy', ACTIVE_SOURCE)
+            progress(ACTIVE_SOURCE,'loading','已取得浏览器，正在检索')
+        except BaseException as e:
+            if acquired: BROWSER_LOCK.release()
+            if isinstance(e,asyncio.TimeoutError):
+                raise CollectorError('queue_timeout','等待浏览器超过 30 分钟，本轮未完成',budget.jobs() if budget else []) from e
+            raise
+        finally:
+            if budget: budget.resume()
         return self
 
     async def __aexit__(self, *exc):
         import time
-        global _last_release, ACTIVE_SOURCE
+        global _last_release, ACTIVE_SOURCE, ACTIVE_TASK
         _last_release = time.monotonic()
         ACTIVE_SOURCE = ""
+        ACTIVE_TASK = None
         BROWSER_LOCK.release()
 
 
@@ -208,6 +236,9 @@ class Visit:
         self.title = ""
         self._pending: set[str] = set()
         self._bodies: asyncio.Queue = asyncio.Queue()
+        self._response_meta = {}
+        self.last_response_meta = {}
+        self._request_params = {}
 
     async def __aenter__(self):
         self._slot = browser_slot()
@@ -246,10 +277,28 @@ class Visit:
         while True:
             ev = await self.page.events.get()
             m, p = ev["method"], ev.get("params", {})
+            if m == 'Network.requestWillBeSent' and self.capture and self.capture.search(p.get('request',{}).get('url','')):
+                try:
+                    from urllib.parse import parse_qs
+                    raw=p['request'].get('postData') or '{}'
+                    try: body=json.loads(raw)
+                    except ValueError:
+                        body={k:v[0] for k,v in parse_qs(raw).items()}
+                        for key in ('jobCity',):
+                            if key in body:
+                                try: body[key]=json.loads(body[key])
+                                except ValueError: body[key]=[body[key]]
+                    self._request_params[p['requestId']]={k:body[k] for k in ('query','jobCity','recruitType','page','pageSize','latest') if k in body}
+                except (ValueError,TypeError):
+                    pass
             if m == "Page.frameNavigated" and not p.get("frame", {}).get("parentId"):
                 self.final_url = p["frame"].get("url", "")
             elif m == "Network.responseReceived" and self.capture and self.capture.search(p.get("response", {}).get("url", "")):
                 self._pending.add(p["requestId"])
+                from urllib.parse import urlparse,parse_qs
+                url=urlparse(p['response']['url'])
+                self._response_meta[p['requestId']]={'path':url.path,'query':{k:v[0] for k,v in parse_qs(url.query).items() if k in ('query','offset','sortby','page','city','keyword','jobArea','pageNum','searchType','sortType','pageSize')}}
+                self._response_meta[p['requestId']]['body']=self._request_params.pop(p['requestId'],{})
             elif m == "Network.loadingFinished" and p.get("requestId") in self._pending:
                 self._pending.discard(p["requestId"])
                 try:
@@ -257,13 +306,14 @@ class Visit:
                     text = body.get("body", "")
                     if body.get("base64Encoded"):
                         text = base64.b64decode(text).decode("utf-8", "replace")
-                    await self._bodies.put(json.loads(text))
+                    await self._bodies.put((json.loads(text),self._response_meta.pop(p['requestId'],{})))
                 except Exception:
                     pass
 
     async def next_json(self, timeout: float = 20) -> Any | None:
         try:
-            return await asyncio.wait_for(self._bodies.get(), timeout)
+            data,self.last_response_meta=await asyncio.wait_for(self._bodies.get(), timeout)
+            return data
         except asyncio.TimeoutError:
             return None
 

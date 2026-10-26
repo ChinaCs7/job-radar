@@ -84,19 +84,21 @@ export const STATE_META: Record<Source["state"], { dot: string; label: string }>
 };
 
 /** 点了以后一直转圈直到操作完成，期间不能重复点。所有会发请求的按钮都用它。 */
-export function AsyncButton({ onClick, children, icon, className = "btn", disabled, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
-  onClick: () => Promise<unknown> | unknown; icon?: ReactNode;
+export function AsyncButton({ onClick, children, icon, busyLabel, className = "btn", disabled, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
+  onClick: () => Promise<unknown> | unknown; icon?: ReactNode; busyLabel?: ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  const pending = useRef(false);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   return (
     <button {...rest} className={className} disabled={disabled || busy} aria-busy={busy}
       onClick={async () => {
-        setBusy(true);
-        try { await onClick(); } finally { if (alive.current) setBusy(false); }
+        if (pending.current || disabled) return;
+        pending.current = true; setBusy(true);
+        try { await onClick(); } finally { pending.current = false; if (alive.current) setBusy(false); }
       }}>
-      {busy ? <Loader2 className="spin" /> : icon}{children}
+      {busy ? <Loader2 className="spin" /> : icon}{busy ? busyLabel ?? children : children}
     </button>
   );
 }

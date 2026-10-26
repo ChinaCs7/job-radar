@@ -20,3 +20,23 @@ desktop/out/
 .impeccable/mocks/
 
 *.log
+work/
+
+# Local credentials and databases
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.vscode/
+.idea/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+.DS_Store
+Thumbs.db

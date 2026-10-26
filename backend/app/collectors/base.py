@@ -23,9 +23,10 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 
 class CollectorError(Exception):
-    def __init__(self, kind: str, message: str):
+    def __init__(self, kind: str, message: str, partial=None):
         super().__init__(message)
         self.kind = kind
+        self.partial = partial or []
 
 
 @dataclass

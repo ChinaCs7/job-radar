@@ -49,6 +49,7 @@ class Companies(Collector):
             for comp in companies:
                 fn = getattr(self, f"_{comp['type']}", None)
                 if not fn:
+                    errors.append(f'{comp["name"]}：尚不支持此招聘系统')
                     continue
                 try:
                     for kw in kws:
@@ -59,8 +60,7 @@ class Companies(Collector):
         if errors and not out:
             raise CollectorError("network", "；".join(errors))
         if errors:
-            from .. import db
-            db.log("warn", "部分公司官网检索失败：" + "；".join(errors), "company")
+            raise CollectorError('partial','部分公司官网检索失败：'+'；'.join(errors),out)
         return out
 
     async def _tencent(self, http, comp, kw, criteria, cfg, settings):

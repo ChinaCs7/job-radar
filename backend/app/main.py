@@ -11,12 +11,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import browser, db, llm
+from . import browser, db, llm, plans
+from .plan_context import current_plan, scope
 from .collectors import BROWSER_SOURCES, REGISTRY
 from .collectors import boss as boss_mod
 from .collectors.webpages import SITES
@@ -25,6 +26,7 @@ from .scheduler import scheduler
 
 UI_DIST = Path(os.getenv("JOB_RADAR_UI") or Path(__file__).resolve().parents[2] / "ui" / "dist")
 SUMMARY_PATH = DATA_DIR / "summaries.json"
+SERVICE_STARTED_AT = datetime.now().isoformat(timespec='seconds')
 
 
 @asynccontextmanager
@@ -42,9 +44,92 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
                    allow_methods=["*"], allow_headers=["*"])
 
 
+@app.middleware('http')
+async def plan_scope(request: Request, call_next):
+    if not request.url.path.startswith('/api/') or request.url.path in ('/api/health','/api/plans','/api/plans/batch'):
+        return await call_next(request)
+    pid=request.headers.get('X-Plan-ID') or request.query_params.get('plan_id') or 'legacy'
+    try:
+        # Plan lifecycle routes also need to be able to restore deleted plans.
+        plans.get(pid,include_deleted=request.url.path.startswith('/api/plans/'))
+    except ValueError as e:
+        return JSONResponse({'detail':str(e)},status_code=404)
+    with scope(pid):
+        return await call_next(request)
+
+
+@app.exception_handler(ValueError)
+async def value_error(request: Request, exc: ValueError):
+    return JSONResponse({'detail':str(exc)},status_code=400)
+
+
+@app.get('/api/plans')
+def list_plans(include_deleted: bool=False):
+    return plans.listing(include_deleted)
+
+
+@app.post('/api/plans')
+def create_plan(body: dict=Body(...)):
+    return plans.create(body)
+
+
+@app.post('/api/plans/batch')
+def batch_plans(body: dict=Body(...)):
+    directions=body.get('directions') or []
+    cities=body.get('cities') or ['']
+    if not isinstance(directions,list) or not isinstance(cities,list) or not directions or len(directions)*len(cities)>20:
+        raise ValueError('请填写方向，单次最多组合 20 个方案')
+    if any(not isinstance(x,str) or not x.strip() for x in directions) or any(not isinstance(x,str) for x in cities):
+        raise ValueError('方向和城市应填写文字')
+    base=plans.clean_criteria(body.get('criteria') or {})
+    # Validate the complete batch before creating any rows.
+    rows=[{'person':body.get('person') or '我','name':f'{d.strip()} · {city.strip() or "不限城市"}',
+           'criteria':{**base,'keywords':[d.strip()],'cities':[city.strip()] if city.strip() else []}}
+          for d in dict.fromkeys(directions) for city in dict.fromkeys(cities)]
+    return [plans.create(row) for row in rows]
+
+
+@app.get('/api/plans/{pid}')
+def get_plan(pid: str):
+    return plans.get(pid,True)
+
+
+@app.patch('/api/plans/{pid}')
+def update_plan(pid: str, body: dict=Body(...)):
+    p=plans.update(pid,body)
+    if p['state']!='active' or 'criteria' in body: scheduler.cancel(pid)
+    return p
+
+
+@app.delete('/api/plans/{pid}')
+def delete_plan(pid: str):
+    scheduler.cancel(pid)
+    return plans.update(pid,{'state':'deleted','running':False})
+
+
+@app.post('/api/plans/{pid}/copy')
+def copy_plan(pid: str):
+    return plans.copy_plan(pid)
+
+
+@app.post('/api/plans/{pid}/reevaluate')
+def reevaluate_plan(pid: str):
+    plans.get(pid)
+    db.conn().execute('UPDATE plans SET evaluation_enabled=1,revision=revision+1 WHERE id=?',(pid,))
+    db.conn().execute("UPDATE plan_jobs SET evaluated=0,filtered=0,attempts=0,retry_at='',score=NULL,score_reason='',ai_summary='',verdict='',verdict_reason='',revision=(SELECT revision FROM plans WHERE id=?) WHERE plan_id=?",(pid,pid))
+    db.conn().commit()
+    return {'ok':True}
+
+
+@app.post('/api/cancel')
+def cancel_run(body: dict=Body(default={})):
+    return {'cancelled':scheduler.cancel(current_plan.get(),body.get('source'))}
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "data_dir": str(DATA_DIR)}
+    return {"ok": True, "data_dir": str(DATA_DIR), "started_at": SERVICE_STARTED_AT,
+            "collection_timeout_mode": "active_time_excluding_browser_queue"}
 
 
 # ---------- 设置 ----------
@@ -76,6 +161,15 @@ def sources():
     return list(scheduler.status().values())
 
 
+@app.get('/api/boss/coverage')
+def boss_coverage():
+    from .collectors import boss_state
+    boss_state.init()
+    rows=db.conn().execute('SELECT at,payload FROM boss_receipts WHERE plan_id=? ORDER BY id DESC LIMIT 10',
+                          (current_plan.get() or 'legacy',)).fetchall()
+    return [{'at':r['at'],**json.loads(r['payload'])} for r in rows]
+
+
 @app.post("/api/run")
 async def run_now(body: dict = Body(default={})):
     # 必须是 async：检索任务要建在主事件循环上（同步接口跑在线程池里，没有事件循环）
@@ -83,8 +177,8 @@ async def run_now(body: dict = Body(default={})):
     if sid:
         if sid not in REGISTRY:
             raise HTTPException(404, "没有这个信源")
-        scheduler.trigger(sid)
-        return {"ok": True, "started": [sid]}
+        started=scheduler.trigger(sid)
+        return {"ok": True, "started": [sid] if started else []}
     started = scheduler.run_all_now()
     return {"ok": True, "started": started}
 
@@ -108,10 +202,10 @@ def overview():
         "running": [x["id"] for x in st.values() if x["state"] == "running"],
         "queued": [x["id"] for x in st.values() if x["state"] == "queued"],
         # 还没被 AI 整理的岗位数（填了 key 且开着自动整理时才会处理）
-        "pending_enrich": db.conn().execute("SELECT COUNT(*) FROM jobs WHERE enriched=0").fetchone()[0]
-        if s["llm"].get("api_key") and s["llm"].get("enrich") else 0,
+        "pending_enrich": db.pending_count()
+        if s["llm"].get("api_key") and s["llm"].get("enrich") and plans.get()['evaluation_enabled'] else 0,
     }
-    return {"stats": db.job_stats(), "sources": list(st.values()), "running": s["running"], "activity": activity,
+    return {"plan":s.get('plan'),"stats": db.job_stats(), "sources": list(st.values()), "running": s["running"], "activity": activity,
             "has_key": bool(s["llm"].get("api_key")), "onboarded": s["onboarded"],
             "has_keywords": bool(s["criteria"]["keywords"])}
 
@@ -145,13 +239,14 @@ def jobs(days: int | None = None, date: str | None = None, source: str | None = 
 def job_by_serial(serial: int):
     """AI 回答里写的「#588」→ 对应的岗位（界面上点编号直接打开）。"""
     row = db.conn().execute("SELECT id FROM jobs WHERE serial=?", (serial,)).fetchone()
-    if not row:
+    if not row or not db.get_job(row['id']):
         raise HTTPException(404, "没有这个编号的岗位")
     return db.get_job(row["id"])
 
 
 @app.patch("/api/jobs/{job_id}")
 def patch_job(job_id: str, body: dict = Body(...)):
+    if not db.get_job(job_id): raise HTTPException(404,'这个岗位不在当前方案中')
     if body.get("status") not in ("new", "seen", "starred", "applied", "dismissed"):
         raise HTTPException(400, "状态不对")
     db.update_job(job_id, {"status": body["status"]})
@@ -293,6 +388,16 @@ async def assistant(body: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
+@app.post('/api/assistant/stream')
+async def assistant_stream(body: dict = Body(...)):
+    from . import agent_stream
+    s=load_settings()
+    async def stream():
+        async for event in agent_stream.events(s['llm'],s['criteria'],body.get('messages') or []):
+            yield 'data: '+json.dumps(event,ensure_ascii=False)+'\n\n'
+    return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+
+
 def _summaries() -> dict:
     try:
         return json.loads(SUMMARY_PATH.read_text("utf-8"))
@@ -302,7 +407,7 @@ def _summaries() -> dict:
 
 @app.get("/api/summary")
 def get_summary(date: str):
-    return _summaries().get(date) or {}
+    return _summaries().get(f'{current_plan.get()}:{date}:{plans.get()["revision"]}') or {}
 
 
 @app.post("/api/summary")
@@ -324,9 +429,10 @@ async def make_summary(body: dict = Body(...)):
     except llm.LLMError as e:
         raise HTTPException(400, str(e))
     allsum = _summaries()
-    allsum[day] = {"text": text, "count": len(good), "hidden": hidden, "scope": scope, "at": db.now()}
+    key=f'{current_plan.get()}:{day}:{plans.get()["revision"]}'
+    allsum[key] = {"text": text, "count": len(good), "hidden": hidden, "scope": scope, "at": db.now()}
     SUMMARY_PATH.write_text(json.dumps(allsum, ensure_ascii=False, indent=1), "utf-8")
-    return allsum[day]
+    return allsum[key]
 
 
 # ---------- 导出：生成一个单文件 H5，可以发到手机或发给别人看 ----------
@@ -341,7 +447,7 @@ def export(days: int = 7):
     # 把数据直接嵌进页面，结果页检测到 window.__SNAPSHOT__ 就不再请求接口
     payload = json.dumps({"jobs": rows, "at": db.now(), "days": days}, ensure_ascii=False).replace("</", r"<\/")
     html = tpl.read_text("utf-8").replace("<head>", f"<head><script>window.__SNAPSHOT__={payload}</script>", 1)
-    name = f"job-radar-{datetime.now():%Y%m%d-%H%M}.html"
+    name = f"job-radar-{current_plan.get()}-{datetime.now():%Y%m%d-%H%M%S}.html"
     out = DATA_DIR / "exports"
     out.mkdir(exist_ok=True)
     (out / name).write_text(html, "utf-8")

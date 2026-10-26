@@ -25,7 +25,7 @@ _MEDIA_SITES = ["xiaohongshu.com", "maimai.cn", "zhihu.com", "okjike.com", "nowc
 _login = {"interval_min": 180, "night_pause": True}   # 要登录的平台：间隔长、夜里停
 DEFAULT_SOURCES = {
     # 招聘平台（浏览器）
-    "boss":     {"enabled": True,  "interval_min": 180, "night_pause": True,  "max_pages": 1, "max_combos": 3},
+    "boss":     {"enabled": True,  "interval_min": 180, "night_pause": True,  "max_pages": 2, "max_combos": 3, "detail_budget": 3},
     "liepin":   {"enabled": True,  "interval_min": 120, "night_pause": True},
     "51job":    {"enabled": True,  "interval_min": 120, "night_pause": True},
     "zhilian":  {"enabled": False, "interval_min": 180, "night_pause": True},   # 要登录
@@ -82,7 +82,7 @@ DEFAULT_SETTINGS = {
     "night": {"start": 1, "end": 7},  # 夜间暂停的时段（本地时间，小时）
 }
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -96,7 +96,7 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
-def load_settings() -> dict:
+def load_global_settings() -> dict:
     with _lock:
         if SETTINGS_PATH.exists():
             try:
@@ -108,14 +108,49 @@ def load_settings() -> dict:
         return _merge(DEFAULT_SETTINGS, saved)
 
 
-def save_settings(patch: dict) -> dict:
-    current = load_settings()
-    merged = _merge(current, patch)
+def save_global_settings(patch: dict) -> dict:
     with _lock:
+        current = load_global_settings()
+        merged = _merge(current, patch)
         tmp = SETTINGS_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), "utf-8")
         tmp.replace(SETTINGS_PATH)
     return merged
+
+
+def load_settings() -> dict:
+    from .plan_context import current_plan
+    s = load_global_settings()
+    if current_plan.get():
+        from .plans import get
+        p = get()
+        s['criteria'] = p['criteria']
+        s['running'] = p['running'] and p['state'] == 'active'
+        s['sources'] = _merge(s['sources'], p['sources'])
+        # Account health and pauses are global even when the search plan changes.
+        for sid, cfg in load_global_settings()['sources'].items():
+            for k in ('paused','paused_reason','login_checked_at'):
+                if k in cfg: s['sources'].setdefault(sid,{})[k] = cfg[k]
+        s['plan'] = {k:p[k] for k in ('id','name','person','revision','state')}
+        s['onboarded'] = bool(p['criteria']['keywords'])
+    return s
+
+
+def save_settings(patch: dict) -> dict:
+    from .plan_context import current_plan
+    patch = copy.deepcopy(patch)
+    if current_plan.get():
+        from .plans import update
+        local = {k:patch.pop(k) for k in ('criteria','sources','running') if k in patch}
+        if 'sources' in local:
+            health = {}
+            for sid,cfg in local['sources'].items():
+                h = {k:cfg.pop(k) for k in ('paused','paused_reason','login_checked_at') if k in cfg}
+                if h: health[sid] = h
+            if health: save_global_settings({'sources':health})
+        if local: update(current_plan.get(),local)
+    if patch: save_global_settings(patch)
+    return load_settings()
 
 
 def public_settings(s: dict) -> dict:

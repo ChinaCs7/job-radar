@@ -41,8 +41,8 @@ class Job:
 
     @property
     def cluster_key(self) -> str:
-        """跨平台去重用：公司 + 岗位名归一化。同一个岗位在 Boss 和 LinkedIn 都发了，会落到同一个 key。"""
-        return cluster_key(self.company, self.title)
+        """展示归组：公司、岗位名、城市和类型；不覆盖原始平台记录。"""
+        return cluster_key(self.company, self.title, self.city, self.job_type)
 
 
 _PUNCT = re.compile(r"[\s\-_·•|｜/\\()（）\[\]【】,，.。:：!！?？'\"]+")
@@ -75,12 +75,12 @@ def norm_title(title: str) -> str:
     return _PUNCT.sub("", t)
 
 
-def cluster_key(company: str, title: str) -> str:
-    """跨平台去重的依据：归一化后的「公司 + 岗位名」相同，就认为是同一个岗位。"""
+def cluster_key(company: str, title: str, city: str = '', job_type: str = '') -> str:
+    """同公司、岗位名、城市和类型的记录保守归组，身份仍由平台 ID 区分。"""
     c, t = norm_company(company), norm_title(title)
     if not c or not t:
         return ""
-    return hashlib.sha1(f"{c}|{t}".encode()).hexdigest()[:16]
+    return hashlib.sha1(f"{c}|{t}|{city.strip().removesuffix('市')}|{job_type}".encode()).hexdigest()[:16]
 
 
 _K = re.compile(r"(\d+(?:\.\d+)?)\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*([kK千])")

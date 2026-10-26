@@ -26,7 +26,7 @@ from .. import browser
 from ..models import REGION_DOMESTIC, Job
 from .base import Collector, CollectorError, SourceInfo, keywords_of
 from .boss import guess_type
-from .websearch import site_label
+from .websearch import site_label,search_queries
 
 
 # ---------- 收链接 ----------
@@ -49,7 +49,10 @@ def harvest(html: str, base: str, href_re: str, *, container_xpath: str | None =
             key = re.sub(r"[?#].*$", "", href) if "xsec_token" not in href else href
             title = _clean(a.text_content())
             ctx, node = "", a
+            if container_xpath:
+                ctx = _clean(root.text_content())[:800]
             for _ in range(6):
+                if ctx: break
                 node = node.getparent()
                 if node is None:
                     break
@@ -120,6 +123,26 @@ CITY_58 = {"北京": "bj", "上海": "sh", "广州": "gz", "深圳": "sz", "杭�
 
 def _city(c: dict) -> str:
     return (c.get("cities") or [""])[0].removesuffix("市")
+
+
+def zhilian_url(keyword, criteria):
+    city=_city(criteria)
+    code={'厦门':'682','':'489'}.get(city)
+    if code is None: raise CollectorError('config',f'智联城市代码尚未核验：{city}；目前已验证厦门和全国，不回退到其他城市')
+    return f'https://www.zhaopin.com/jobs/?jl={code}&kw={quote(keyword)}'
+
+
+def verified_zhilian(html,keyword,criteria):
+    import json
+    m=re.search(r'__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>',html,re.S)
+    try: state=json.loads(m.group(1)) if m else {}
+    except ValueError: state={}
+    params=state.get('queryParams') or {}
+    from urllib.parse import urlparse,parse_qs
+    expected=parse_qs(urlparse(zhilian_url(keyword,criteria)).query)
+    if any(str(params.get(k))!=v[0] for k,v in expected.items()) or not isinstance(state.get('positionList'),list):
+        raise CollectorError('coverage','智联页面搜索条件不符或列表缺失，未接受全国推荐结果')
+    return parse_zhilian(html)
 
 
 def parse_liepin(d: dict) -> list[Job]:
@@ -243,22 +266,22 @@ SITES: dict[str, Site] = {s.id: s for s in [
          lambda k, c: f"https://we.51job.com/pc/search?keyword={quote(k)}&searchType=2&sortType=0",
          note="不登录也能搜，城市按 IP 默认", home="https://we.51job.com/",
          capture=r"api/job/search-pc", parse=parse_51job, blocked=("verify", "captcha"), login=("login.51job",)),
-    Site("zhilian", "智联招聘", "招聘平台", lambda k, c: f"https://sou.zhaopin.com/?kw={quote(k)}",
-         note="建议登录；数据从页面内嵌的岗位列表里读", needs_login=True, home="https://passport.zhaopin.com/login",
+    Site("zhilian", "智联招聘", "招聘平台", zhilian_url,
+         note="已核验厦门/全国关键词搜索，当前仅首页；其他城市及翻页待适配", needs_login=True, home="https://passport.zhaopin.com/login",
          parse_html=parse_zhilian, blocked=("verify", "captcha"), login=("passport.zhaopin",)),
     Site("lagou", "拉勾", "招聘平台", lambda k, c: f"https://www.lagou.com/wn/jobs?kd={quote(k)}&city={quote(_city(c) or '全国')}",
          note="首次要过滑块验证，互联网岗位多", verify_once=True, home="https://www.lagou.com/wn/jobs?kd=Python",
          href=r"lagou\.com/(wn/)?jobs/\d+\.html", blocked=("verify", "滑动验证"), login=("passport.lagou",)),
     Site("58", "58 同城", "招聘平台",
          lambda k, c: f"https://{CITY_58.get(_city(c), 'bj')}.58.com/job/?key={quote(k)}",
-         note="首次要过验证码；城市取搜索条件里的第一个", verify_once=True, home="https://bj.58.com/job/",
+         note="检索入口重定向会丢失关键词，暂不可用；不会导入全站推荐列表", verify_once=True, home="https://bj.58.com/job/",
          href=r"58\.com/[\w/]+/\d+x\.shtml", blocked=("antibot", "verifycode"), login=("passport.58",)),
     Site("nowcoder", "牛客", "招聘平台", lambda k, c: f"https://www.nowcoder.com/jobs/recommend/campus?keyword={quote(k)}",
          note="校招、实习、内推为主", home="https://www.nowcoder.com/jobs",
          href=r"nowcoder\.com/jobs/detail/\d+", login=("/login",)),
     # —— 公司官网里需要浏览器的 ——
     Site("xhsjobs", "小红书官网", "公司官网", lambda k, c: f"https://job.xiaohongshu.com/social/position?keyword={quote(k)}",
-         note="小红书招聘官网（接口带签名，所以走浏览器）", home="https://job.xiaohongshu.com/",
+         note="当前入口未证实关键词生效，暂不可用；避免导入无关职位", home="https://job.xiaohongshu.com/",
          capture=r"pageQueryPosition", parse=parse_xhsjobs),
     # —— 媒体平台：都要登录；帖子交给 AI 判断是不是招聘 ——
     Site("xiaohongshu", "小红书", "媒体平台",
@@ -269,12 +292,13 @@ SITES: dict[str, Site] = {s.id: s for s in [
     Site("zhihu", "知乎", "媒体平台", lambda k, c: f"https://www.zhihu.com/search?type=content&q={quote(k)}",
          note="需要登录", needs_login=True, home="https://www.zhihu.com/signin",
          href=r"(zhihu\.com/question/\d+(/answer/\d+)?|zhuanlan\.zhihu\.com/p/\d+)", login=("signin", "/login"),
+         container="//div[contains(concat(' ',normalize-space(@class),' '),' ContentItem ')]",
          suffix=" 招聘", enabled=False),
     Site("weibo", "微博", "媒体平台", lambda k, c: f"https://s.weibo.com/weibo?q={quote(k)}",
          note="需要登录", needs_login=True, home="https://weibo.com/login.php",
          href=r"weibo\.com/\d+/[A-Za-z0-9]{8,}", login=("passport.weibo", "login"), suffix=" 招聘", enabled=False),
     Site("maimai", "脉脉", "媒体平台", lambda k, c: f"https://maimai.cn/web/search_center?type=gossip&query={quote(k)}",
-         note="实验性：职言区帖子没有独立链接、且多为求职帖，暂时拿不到数据", needs_login=True, home="https://maimai.cn/platform/login",
+         note="由脉脉专用采集器读取职言正文和发帖时间，需要登录", needs_login=True, home="https://maimai.cn/platform/login",
          href=r"maimai\.cn/web/(gossip_detail|feed_detail)", login=("platform/login",), suffix=" 内推", enabled=False),
     Site("jike", "即刻", "媒体平台", lambda k, c: f"https://web.okjike.com/search?keyword={quote(k)}",
          note="需要登录", needs_login=True, home="https://web.okjike.com/login",
@@ -288,6 +312,10 @@ class WebPage(Collector):
         self.site = site
         self.info = SourceInfo(site.id, site.name, site.group, "domestic",
                                needs_login=site.needs_login or site.verify_once, note=site.note)
+        if site.id=='nowcoder':
+            self.info.note='仅支持校园招聘入口；非实习方案暂不支持。'+self.info.note
+        elif not site.capture and not site.parse_html:
+            self.info.note='线索采集：详情与发布日期待核验，不代表全站最新岗位。'+self.info.note
         self.info.verify_once = site.verify_once  # type: ignore[attr-defined]
         self.info.home = site.home  # type: ignore[attr-defined]
 
@@ -300,17 +328,39 @@ class WebPage(Collector):
             raise CollectorError("login", f"{self.site.name} 需要登录：请在「账号与密钥」里打开登录窗口")
 
     async def collect(self, criteria, cfg, settings):
+        out=[]
+        from ..collection_budget import track
+        track(out)
+        try:
+            return await self._collect(criteria,cfg,settings,out)
+        except CollectorError as e:
+            e.partial=list({j.id:j for j in [*out,*e.partial]}.values());raise
+        except Exception as e:
+            raise CollectorError('network',f'{self.site.name} 本轮中断：{type(e).__name__}',out) from e
+
+    async def _collect(self, criteria, cfg, settings, out):
+        from .. import plans, db
+        from ..execution import progress
         s = self.site
-        kws = keywords_of(criteria)[: int(cfg.get("max_keywords", 2))]
-        out: list[Job] = []
-        for kw in kws:
+        if s.id=='nowcoder' and 'intern' not in criteria.get('job_types',[]):
+            raise CollectorError('config','当前牛客适配器只覆盖校招入口，不用于社招方案；请关闭该信源或等待社招适配')
+        if s.id in ('58','xhsjobs'):
+            raise CollectorError('config',f'{s.name} 当前入口未能按关键词检索，适配未完成；不会把推荐列表当成搜索结果')
+        combos=[(kw,city) for kw in keywords_of(criteria) for city in criteria.get('cities') or ['']]
+        if s.id=='zhilian':
+            for kw,city in combos: zhilian_url(kw,{'cities':[city]})
+        for kw,city in plans.rotate(s.id,combos,max(1,min(3,int(cfg.get("max_keywords", 2))))):
+            criteria={**criteria,'cities':[city] if city else []}
+            progress(s.id,'searching',f'搜索「{kw}」；按当前平台的专用解析规则提取')
             q = kw + s.suffix
             async with browser.Visit(s.url(q, criteria), capture=s.capture or None) as v:
                 if s.parse_html:
                     await v.scroll(1)
                     html = await v.html()
                     self._check(v)
-                    out += [j for j in s.parse_html(html) if j.url]
+                    jobs=verified_zhilian(html,kw,criteria) if s.id=='zhilian' else s.parse_html(html)
+                    out += [j for j in jobs if j.url]
+                    db.log('info',f'{s.name}：本轮仅核验搜索首页，未覆盖后续页；详情待补',s.id)
                 elif s.capture and s.parse:
                     # 同一个页面可能先请求「筛选条件」再请求「岗位列表」，地址相近；全部收下逐个解析
                     got, first = [], await v.next_json(20)
@@ -321,11 +371,16 @@ class WebPage(Collector):
                     self._check(v)
                     if not got:
                         raise CollectorError("network", f"{s.name} 没有返回搜索结果（页面可能改版或加载太慢）")
+                    parsed_count=0
                     for d in got:
                         try:
-                            out += [j for j in s.parse(d) if j.url]
+                            parsed=[j for j in s.parse(d) if j.url]
+                            parsed_count+=len(parsed)
+                            out += parsed
                         except (AttributeError, TypeError, KeyError):
                             continue
+                    if not parsed_count:
+                        raise CollectorError('parse','接口已响应但没有解析出岗位；可能为空或结构变化，不能确认检索完成')
                 else:
                     await v.scroll(s.scroll)
                     html = await v.html()
@@ -333,6 +388,8 @@ class WebPage(Collector):
                     items = harvest(html, v.final_url or s.home, s.href, container_xpath=s.container)
                     if not items and s.needs_login and ("登录" in html[:200000]):
                         raise CollectorError("login", f"{s.name} 需要登录：请在「账号与密钥」里打开登录窗口")
+                    if not items:
+                        raise CollectorError('parse',f'{s.name} 未识别到结果容器；不将空结果视为完整检索')
                     for href, title, ctx in items:
                         title, ctx = split_title(title, ctx)
                         out.append(Job(
@@ -352,12 +409,13 @@ class BingSearch(Collector):
                       note="免费：用专用浏览器搜必应，按站点搜小红书、脉脉、知乎、牛客等")
 
     async def collect(self, criteria, cfg, settings):
-        kws = keywords_of(criteria)
         sites = cfg.get("sites") or []
-        city = " ".join((criteria.get("cities") or [])[:1])
-        queries = [f"{kw} 招聘 site:{s}" for kw in kws for s in sites] + [f"{kw} 招聘 {city}".strip() for kw in kws]
+        from .. import plans
+        queries=plans.rotate('bing',search_queries(criteria,sites),max(1,min(10,int(cfg.get('max_queries',10)))))
         out: list[Job] = []
-        for q in queries[: int(cfg.get("max_queries", 10))]:
+        from ..collection_budget import track
+        track(out)
+        for q in queries:
             async with browser.Visit(f"https://cn.bing.com/search?q={quote(q)}&count=30", settle=3) as v:
                 html = await v.html()
                 if "captcha" in (v.final_url or "") or "验证" in v.title:
