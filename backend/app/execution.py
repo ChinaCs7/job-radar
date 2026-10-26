@@ -168,7 +168,9 @@ async def enrich_pending(batch=10):
             try: score=max(0,min(100,int(it.get('score',0))))
             except (TypeError,ValueError): retry(row,'分数格式错误'); continue
             ok,why=passes(row,s['criteria'])
-            if row['job_type']=='not_a_job': ok,why=False,'不是具体招聘信息'
+            if row['job_type']=='not_a_job' or it.get('is_job') is False:
+                ok,why=False,'不是具体招聘信息'
+                score=0
             verdict=it['verdict'] if ok else 'no'
             gaps=quality(row)
             reason=str(it.get('reason') or '')[:300] if ok else why

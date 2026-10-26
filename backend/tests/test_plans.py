@@ -390,6 +390,38 @@ class PlanTests(unittest.TestCase):
             j=db.get_job(self.job.id);self.assertEqual(j['enriched'],0);self.assertEqual(j['attempts'],1)
         save_global_settings({'llm':{'api_key':''}})
 
+    def test_ai_non_job_is_filtered_even_with_conflicting_recommendation(self):
+        save_global_settings({'llm':{'api_key':'test-only','enrich':True}})
+        with scope(self.p['id']):
+            db.upsert_jobs([self.job])
+            with patch.object(llm,'enrich',AsyncMock(return_value=[{
+                'i':0,'is_job':False,'verdict':'recommend','score':95,
+                'reason':'实际是课程推广','summary':'课程广告'}])):
+                asyncio.run(execution.enrich_pending())
+            row=db.get_job(self.job.id)
+            self.assertEqual(row['verdict'],'no')
+            self.assertEqual(row['status'],'filtered')
+            self.assertEqual(row['verdict_reason'],'不是具体招聘信息')
+            self.assertEqual(row['score'],0)
+            self.assertEqual(db.query_jobs(),[])
+        with scope(self.q['id']):
+            self.assertIsNone(db.get_job(self.job.id))
+        save_global_settings({'llm':{'api_key':''}})
+
+    def test_ai_unknown_job_kind_does_not_filter_candidate(self):
+        save_global_settings({'llm':{'api_key':'test-only','enrich':True}})
+        with scope(self.p['id']):
+            db.upsert_jobs([self.job])
+            with patch.object(llm,'enrich',AsyncMock(return_value=[{
+                'i':0,'is_job':None,'verdict':'maybe','score':50,
+                'reason':'需要核验原文','summary':'招聘线索'}])):
+                asyncio.run(execution.enrich_pending())
+            row=db.get_job(self.job.id)
+            self.assertEqual(row['verdict'],'maybe')
+            self.assertNotEqual(row['status'],'filtered')
+            self.assertEqual(len(db.query_jobs()),1)
+        save_global_settings({'llm':{'api_key':''}})
+
     def test_unknown_date_cannot_be_confirmed_recommendation(self):
         save_global_settings({'llm':{'api_key':'test-only','enrich':True}})
         self.job.published_at=''
