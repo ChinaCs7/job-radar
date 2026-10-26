@@ -79,6 +79,9 @@
 
 /* AI 助手 */
 .chat { display: grid; grid-template-rows: auto 1fr auto; flex: 1; min-height: 0; }
+.agent-drafts { display:grid; gap:10px; margin-top:12px; }
+.agent-drafts > button { justify-self:start; }
+.steps-line > span { display:inline-flex; gap:4px; align-items:center; }
 .chat-head { padding: 22px 28px 12px; }
 .chat-head .page-head { max-width: 1144px; margin: 0 auto; }
 .chat-head .page-head .grow p { margin-top: 2px; color: var(--text-2); font-size: 13px; }

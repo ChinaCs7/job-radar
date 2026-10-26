@@ -20,6 +20,89 @@ from app.scheduler import Scheduler
 
 
 class PlanTests(unittest.TestCase):
+    def test_preview_rejects_city_inside_direction_without_silent_rewrite(self):
+        args={'person':'小红','profile':'销售经验','cities':['上海','厦门'],'job_types':['fulltime'],'questions':[],
+              'directions':[{'name':'上海-销售','keywords':['销售'],'reason':'经历','evidence':[]}]}
+        with self.assertRaisesRegex(ValueError,'不要把城市'):
+            conductor.run('preview_search_plans',args)
+
+    def test_agent_stream_endpoint_keeps_plan_scope_and_masks_contacts(self):
+        from app.main import app
+        from app import agent_stream
+        from fastapi.testclient import TestClient
+        seen=[]
+        async def model(config,messages):
+            seen.append((plans.get()['id'],messages))
+            yield {'type':'delta','text':'收到'}
+            yield {'type':'message','message':{'role':'assistant','content':'收到'}}
+        with patch.object(agent_stream,'model_events',new=model):
+            result=TestClient(app).post('/api/assistant/stream',headers={'X-Plan-ID':self.q['id']},json={'messages':[{'role':'user','content':'我的电话 13812345678，只设计方案'}]})
+        self.assertEqual(result.status_code,200)
+        self.assertIn('text/event-stream',result.headers['content-type'])
+        self.assertIn('"type": "delta"',result.text);self.assertIn('"type": "done"',result.text)
+        self.assertEqual(seen[0][0],self.q['id'])
+        self.assertNotIn('13812345678',json.dumps(seen))
+
+    def test_resume_preview_combinations_are_read_only_and_masked(self):
+        args={'person':'小红','profile':'电话 13812345678，擅长销售和策划','cities':['上海','厦门'],'job_types':['fulltime'],'questions':['期望薪资待确认'],
+              'directions':[{'name':name,'keywords':[name],'reason':'匹配经历','evidence':['做过相关项目']} for name in ['销售','策划']]}
+        before=len(plans.listing(True))
+        result=conductor.run('preview_search_plans',args)
+        self.assertEqual(len(result['drafts']),4);self.assertFalse(result['saved'])
+        self.assertEqual(len(plans.listing(True)),before)
+        self.assertNotIn('13812345678',json.dumps(result))
+        self.assertEqual({(d['criteria']['keywords'][0],d['criteria']['cities'][0]) for d in result['drafts']},{('销售','上海'),('销售','厦门'),('策划','上海'),('策划','厦门')})
+
+    def test_agent_stream_progress_duplicate_write_and_failure_recovery(self):
+        from app import agent_stream
+        turn=0;writes=[]
+        async def model(config,messages):
+            nonlocal turn
+            turn+=1
+            if turn==1:
+                calls=[{'id':str(i),'function':{'name':'create_plan','arguments':'{"name":"测试"}'}} for i in range(2)]
+                calls.append({'id':'bad','function':{'name':'update_plan','arguments':'not-json'}})
+                yield {'type':'message','message':{'role':'assistant','content':'','tool_calls':calls}}
+            else:
+                yield {'type':'delta','text':'已经完成'}
+                yield {'type':'message','message':{'role':'assistant','content':'已经完成'}}
+        def execute(name,args): writes.append((name,args));return {'ok':True}
+        async def check():
+            with scope(self.p['id']),patch.object(agent_stream,'model_events',new=model),patch.object(llm,'run_tool',side_effect=execute):
+                return [e async for e in agent_stream.events({},self.p['criteria'],[{'role':'user','content':'创建方案'}])]
+        events=asyncio.run(check())
+        self.assertEqual(len(writes),1)
+        self.assertEqual(events[-1]['type'],'done')
+        self.assertEqual([e['status'] for e in events if e['type']=='tool_end'],['done','done','error'])
+        self.assertIn('delta',[e['type'] for e in events])
+
+    def test_agent_model_stream_assembles_fragmented_tool_arguments(self):
+        import httpx
+        from app import agent_stream
+        packets=[{'choices':[{'delta':{'tool_calls':[{'index':0,'id':'a','function':{'name':'list_plans','arguments':'{'}}]}}]},
+                 {'choices':[{'delta':{'tool_calls':[{'index':0,'function':{'arguments':'}'}}]},'finish_reason':'tool_calls'}]},
+                 {'choices':[],'usage':{'prompt_tokens':10}}]
+        raw=''.join('data: '+json.dumps(p)+'\n\n' for p in packets)+'data: [DONE]\n\n'
+        client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(200,text=raw,headers={'content-type':'text/event-stream'})))
+        async def check():
+            with patch.object(agent_stream.httpx,'AsyncClient',return_value=client),patch.object(llm,'record_usage') as usage:
+                out=[e async for e in agent_stream.model_events({'api_key':'test','base_url':'https://example.test'},[])]
+                usage.assert_called_once()
+                return out
+        event=asyncio.run(check())[-1]
+        self.assertEqual(event['message']['tool_calls'][0]['function'],{'name':'list_plans','arguments':'{}'})
+
+    def test_agent_incomplete_model_stream_never_executes_tools(self):
+        import httpx
+        from app import agent_stream
+        packet={'choices':[{'delta':{'tool_calls':[{'index':0,'id':'a','function':{'name':'create_plan','arguments':'{'}}]}}]}
+        client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(200,text='data: '+json.dumps(packet)+'\n\n')))
+        async def check():
+            with patch.object(agent_stream.httpx,'AsyncClient',return_value=client),patch.object(llm,'record_usage'):
+                with self.assertRaises(llm.LLMError):
+                    [e async for e in agent_stream.model_events({'api_key':'test','base_url':'https://example.test'},[])]
+        asyncio.run(check())
+
     def test_keyless_batch_skips_optional_paid_source(self):
         save_global_settings({'llm':{'api_key':''}})
         scheduler=Scheduler()

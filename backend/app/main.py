@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import browser, db, llm, plans
@@ -386,6 +386,16 @@ async def assistant(body: dict = Body(...)):
         return await llm.assistant(s["llm"], s["criteria"], body.get("messages") or [])
     except llm.LLMError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post('/api/assistant/stream')
+async def assistant_stream(body: dict = Body(...)):
+    from . import agent_stream
+    s=load_settings()
+    async def stream():
+        async for event in agent_stream.events(s['llm'],s['criteria'],body.get('messages') or []):
+            yield 'data: '+json.dumps(event,ensure_ascii=False)+'\n\n'
+    return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 
 
 def _summaries() -> dict:

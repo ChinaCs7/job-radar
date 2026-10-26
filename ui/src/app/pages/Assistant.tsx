@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, Check, FileText, Info, Loader2, Paperclip, Search, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { openJob } from "./Jobs";
-import { api, type Proposal } from "../../lib/api";
+import { api, streamAgent, type AgentStep, type SearchDraft, type Proposal } from "../../lib/api";
 import { today } from "../../lib/format";
 import { AsyncButton } from "../../components/ui";
 import type { PageProps } from "../App";
@@ -11,28 +11,32 @@ type ProposalState = "pending" | "applied" | "discarded" | "expired";
 interface Msg {
   role: "user" | "assistant";
   content: string;
-  steps?: { tool: string; args: Record<string, unknown>; count: number | null }[];
+  steps?: AgentStep[];
+  drafts?: SearchDraft[];
+  questions?: string[];
+  notice?: string;
   error?: boolean;
   attachment?: Attachment;
   proposals?: (Proposal & { state?: ProposalState })[];
 }
 
-const KEY = "jr-chat";
+const KEY = "jr-chat-plan:";
 const SUGGEST = [
   "列出我当前的全部求职方案",
-  "根据我的简历，创建适合我的求职方案",
+  "根据我的简历，设计适合我的求职方案",
   "今天最适合我的 3 个岗位是哪些？",
   "收藏的岗位帮我比较一下",
   "各个信源最近表现怎么样？",
 ];
 const TOOL_LABEL: Record<string, string> = {
+  preview_search_plans: "设计搜索方案",
   list_plans: "列出方案", get_plan: "读取方案", create_plan: "创建方案", update_plan: "编辑方案", manage_plan: "管理方案", run_plan: "启动方案检索", cancel_plan: "取消任务", plan_progress: "检查进度", search_plan_jobs: "查询方案岗位",
   search_jobs: "查岗位", get_job: "看详情", get_stats: "看统计", get_settings: "看当前设置", propose_settings: "提出修改方案",
 };
 
 function stepText(s: NonNullable<Msg["steps"]>[number]): string {
   const l = TOOL_LABEL[s.tool] || s.tool;
-  if (s.tool === "get_job") return `${l} #${s.args.serial}`;
+  if (s.tool === "get_job" && s.args.serial != null) return `${l} #${s.args.serial}`;
   if (s.tool === "search_jobs") return `${l}${s.args.q ? `「${s.args.q}」` : ""}（${s.count ?? 0} 条）`;
   return l;
 }
@@ -40,7 +44,8 @@ function stepText(s: NonNullable<Msg["steps"]>[number]): string {
 /** 发给模型的内容：附件（简历）作为一段带标记的文字跟在消息后面 */
 function toWire(m: Msg) {
   const att = m.attachment ? `\n\n<附件 名称="${m.attachment.name}">\n${m.attachment.text}\n</附件>` : "";
-  return { role: m.role, content: m.content + att };
+  const preview=m.drafts ? `\n\n<方案预览数据>${JSON.stringify(m.drafts)}</方案预览数据>` : "";
+  return { role: m.role, content: m.content + att + preview };
 }
 
 /** 只处理 **粗体**、#编号、列表和段落，生成 React 节点而不是拼 HTML：模型输出里可能带着岗位原文。
@@ -60,18 +65,23 @@ function render(text: string, onRef: (n: number) => void): ReactNode {
   });
 }
 
-export default function Assistant({ overview, go, toast, refresh }: PageProps) {
-  const [msgs, setMsgs] = useState<Msg[]>(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+export default function Assistant({ overview, go, toast, refresh, currentPlan }: PageProps) {
+  const [msgs, setMsgs] = useState<Msg[]>(() => { try { return JSON.parse(localStorage.getItem(KEY+currentPlan) || "[]"); } catch { return []; } });
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<"" | "ask" | "summary" | "upload">("");
   const [att, setAtt] = useState<Attachment | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const request = useRef<AbortController | null>(null);
+  const follow = useRef(true);
+  const [stage,setStage] = useState("");
+  useEffect(()=>()=>request.current?.abort(),[]);
 
   useEffect(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(msgs.slice(-40))); } catch { /* 忽略 */ }
-    end.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs]);
+    const timer=window.setTimeout(()=>{try { localStorage.setItem(KEY+currentPlan, JSON.stringify(msgs.slice(-40))); } catch { /* 本机存储不足 */ }},250);
+    if(follow.current) end.current?.scrollIntoView({behavior:busy==='ask'?'auto':'smooth'});
+    return ()=>window.clearTimeout(timer);
+  }, [msgs,currentPlan,busy]);
 
   const openRef = async (n: number) => {
     try { const j = await api.jobBySerial(n); await openJob(j.url, toast); }
@@ -79,17 +89,27 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
   };
 
   const ask = async (text: string) => {
-    const q = text.trim() || (att ? "这是我的简历，帮我看看适合找什么样的岗位，并帮我设置搜索条件" : "");
+    const q = text.trim() || (att ? "这是我的简历，请根据经历设计可执行的求职方案预览，列出依据和待确认项，先不创建或检索" : "");
     if (!q || busy) return;
     const next: Msg[] = [...msgs, { role: "user", content: q, attachment: att ?? undefined }];
-    setMsgs(next); setDraft(""); setAtt(null); setBusy("ask");
+    if(request.current) return;
+    const controller=new AbortController();request.current=controller;follow.current=true;
+    setMsgs([...next,{role:"assistant",content:"",steps:[]}]); setDraft(""); setAtt(null); setBusy("ask");setStage("正在理解需求");
+    const update=(change:(m:Msg)=>Msg)=>setMsgs(ms=>ms.map((m,i)=>i===next.length?change(m):m));
     try {
-      const r = await api.assistant(next.filter((m) => !m.error).map(toWire));
-      refresh();
-      setMsgs([...next, { role: "assistant", content: r.reply, steps: r.steps, proposals: r.proposals?.map((p) => ({ ...p, state: "pending" })) }]);
+      await streamAgent(next.filter(m=>!m.error).map(toWire),event=>{
+        if(event.type==='delta') update(m=>({...m,content:m.content+event.text}));
+        if(event.type==='status') setStage(event.message);
+        if(event.type==='tool_start') update(m=>({...m,steps:[...(m.steps || []),{id:event.id,tool:event.tool,args:{},count:null,status:'running'}]}));
+        if(event.type==='tool_end') update(m=>({...m,steps:(m.steps || []).map(s=>s.id===event.id?event:s)}));
+        if(event.type==='plan_preview') update(m=>({...m,drafts:event.drafts,questions:event.questions}));
+        if(event.type==='proposal') update(m=>({...m,proposals:[...(m.proposals || []),{...event.proposal,state:'pending'}]}));
+        if(event.type==='done') update(m=>({...m,steps:event.steps}));
+      },controller.signal);
     } catch (e) {
-      setMsgs([...next, { role: "assistant", content: (e as Error).message, error: true }]);
-    } finally { setBusy(""); }
+      update(m=>({...m,notice:controller.signal.aborted?'已停止回复；已经执行的方案操作保留，可查看方案列表核对。':(e as Error).message,
+        steps:(m.steps || []).map(s=>s.status==='running'?{...s,status:'error',message:'本轮已中断，执行结果请核对'}:s)}));
+    } finally { request.current=null;setBusy("");setStage("");refresh(); }
   };
 
   const upload = async (f: File | undefined) => {
@@ -140,7 +160,7 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
   if (overview && !overview.has_key) {
     return (
       <div className="page"><div className="empty">
-        <Sparkles /><b>AI 助手需要 DeepSeek key</b><span>填好以后，可以让它帮你挑岗位、按简历设置搜索条件、写总结。</span>
+        <Sparkles /><b>Agent 是可选 AI 功能</b><span>配置 key 后可按简历设计方案、查岗位和写总结。基础检索与方案管理照常可用。</span>
         <button className="btn primary" onClick={() => go("accounts")}>去填写</button>
       </div></div>
     );
@@ -150,14 +170,14 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
     <div className="chat">
       <div className="chat-head">
         <div className="page-head">
-          <div className="grow"><h1>指挥助手</h1>
+          <div className="grow"><h1>Agent</h1>
             <p>描述目标或上传简历，让助手创建、编辑、归档方案，启动检索并检查进度。</p></div>
           <button className="btn" onClick={summary} disabled={!!busy} title="总结今天值得看的岗位；今天没有就总结最近 7 天">
             {busy === "summary" ? <Loader2 className="spin" /> : <Sparkles />}AI 总结</button>
-          {msgs.length > 0 && <button className="btn ghost icon" title="清空对话" aria-label="清空对话" onClick={() => setMsgs([])}><Trash2 /></button>}
+          {msgs.length > 0 && <button className="btn ghost icon" title="清空对话" aria-label="清空对话" disabled={!!busy} onClick={() => setMsgs([])}><Trash2 /></button>}
         </div>
       </div>
-      <div className={`chat-log ${msgs.length === 0 && !busy ? "is-empty" : ""}`}>
+      <div className={`chat-log ${msgs.length === 0 && !busy ? "is-empty" : ""}`} onScroll={e=>{const el=e.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;}}>
         <div className="chat-inner">
           {msgs.length === 0 && !busy && (
             <div className="chat-empty">
@@ -173,7 +193,7 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
             <div key={i} className={`msg ${m.role}`}>
               {m.steps && m.steps.length > 0 && (
                 <div className="steps-line"><Search size={13} />
-                  {m.steps.map((s, j) => <span key={j}>{s.tool === "summary" ? `汇总 ${s.count} 条` : stepText(s)}</span>)}
+                  {m.steps.map((s, j) => <span key={j} title={s.message} className={s.status==='error'?'err':undefined}>{s.status==='running'?<Loader2 size={12} className="spin" />:s.status==='done'?<Check size={12}/>:null}{s.tool === "summary" ? `汇总 ${s.count} 条` : stepText(s)}{s.status==='error'?`：${s.message || '未完成'}`:""}</span>)}
                 </div>
               )}
               {m.attachment && <div className="att-chip"><FileText size={14} />{m.attachment.name}<span className="faint">{m.attachment.chars} 字</span></div>}
@@ -182,12 +202,24 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
               ) : m.content ? (
                 <div className="bubble">{m.role === "assistant" ? render(m.content, openRef) : m.content}</div>
               ) : null}
+              {m.notice && <div className="notice" role="status"><Info size={14}/><span>{m.notice}</span></div>}
+              {m.drafts && <div className="agent-drafts">
+                <b>搜索方案预览 · 尚未创建</b>
+                {m.drafts.map((d,j)=><div className="proposal" key={j}>
+                  <div className="proposal-head"><FileText size={14}/><b>{d.name}</b><span className="badge">{d.person}</span></div>
+                  <div className="proposal-reason">{d.reason}</div>
+                  <div className="proposal-reason">关键词：{d.criteria.keywords.join('、')}<br/>城市：{d.criteria.cities.join('、') || '未限定'} · 类型：{d.criteria.job_types.map(t=>({fulltime:'全职',parttime:'兼职',intern:'实习',contract:'合同/外包'}[t] || t)).join('、')}<br/>月薪下限：{d.criteria.salary_min_k?`${d.criteria.salary_min_k}K`:'未设置'} · 最近 {d.criteria.max_age_days} 天</div>
+                  {d.evidence.length>0 && <div className="proposal-reason muted">简历依据：{d.evidence.join('；')}</div>}
+                </div>)}
+                {!!m.questions?.length && <div className="notice">待确认：{m.questions.join('；')}</div>}
+                <button className="btn" disabled={!!busy} onClick={()=>ask('按这份预览创建独立方案，保留预览条件，不启动检索：'+JSON.stringify(m.drafts))}>创建这些方案</button>
+              </div>}
               {m.proposals?.map((p) => (
                 <ProposalCard key={p.proposal_id} p={p} onApply={(run) => applyProposal(p, run)} onDiscard={() => discardProposal(p)} />
               ))}
             </div>
           ))}
-          {busy === "ask" && <div className="msg assistant"><div className="steps-line"><Loader2 size={13} className="spin" />正在思考、查数据…</div></div>}
+          {busy === "ask" && <div className="msg assistant"><div className="steps-line" role="status"><Loader2 size={13} className="spin" />{stage || "正在生成回复"}</div></div>}
           {busy === "summary" && <div className="msg assistant"><div className="steps-line"><Loader2 size={13} className="spin" />正在总结…</div></div>}
           <div ref={end} />
         </div>
@@ -207,9 +239,10 @@ export default function Assistant({ overview, go, toast, refresh }: PageProps) {
               onClick={() => fileRef.current?.click()}>{busy === "upload" ? <Loader2 className="spin" /> : <Paperclip />}</button>
             <textarea rows={1} value={draft}
               placeholder={att ? "说说你想找什么，例如：远程兼职，开发类（直接回车也行）" : "问问岗位，或者上传简历让它帮你设置；回车发送，Shift + 回车换行"}
+              disabled={!!busy}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); ask(draft); } }} />
-            <button className="btn primary icon" aria-label="发送" disabled={(!draft.trim() && !att) || !!busy} onClick={() => ask(draft)}><ArrowUp /></button>
+            {busy==='ask'?<button className="btn icon" aria-label="停止回复" title="停止本轮回复，已执行的操作保留" onClick={()=>request.current?.abort()}><X/></button>:<button className="btn primary icon" aria-label="发送" disabled={(!draft.trim() && !att) || !!busy} onClick={() => ask(draft)}><ArrowUp /></button>}
           </div>
         </div>
       </div>

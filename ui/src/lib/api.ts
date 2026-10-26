@@ -151,6 +151,36 @@ export interface Proposal {
   reason: string;
 }
 
+export interface AgentStep { id?: string; tool: string; args: Record<string, unknown>; count: number | null; status?: 'running'|'done'|'error'; message?: string }
+export interface SearchDraft { name: string; person: string; criteria: Criteria; reason: string; evidence: string[] }
+export type AgentEvent =
+  | {type:'start';run_id:string} | {type:'status';message:string} | {type:'delta';text:string}
+  | {type:'tool_start';id:string;tool:string} | ({type:'tool_end'} & AgentStep)
+  | {type:'plan_preview';drafts:SearchDraft[];questions:string[]} | {type:'proposal';proposal:Proposal}
+  | {type:'done';run_id:string;steps:AgentStep[];proposals:Proposal[]} | {type:'error';message:string};
+
+export async function streamAgent(messages: {role:string;content:string}[],onEvent:(event:AgentEvent)=>void,signal:AbortSignal):Promise<void> {
+  const response=await fetch(API_BASE+'/api/assistant/stream',{method:'POST',headers:{'Content-Type':'application/json','X-Plan-ID':selectedPlan},body:JSON.stringify({messages}),signal});
+  if (!response.ok) { const error=await response.json().catch(()=>({})); throw new ApiError(error.detail || `Agent 请求失败（${response.status}）`); }
+  if (!response.body) throw new ApiError('当前环境未提供回复流');
+  const reader=response.body.getReader();const decoder=new TextDecoder();let pending='';let done=false;
+  const accept=(block:string)=>{
+    const raw=block.split(/\r?\n/).filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trimStart()).join('\n');
+    if (!raw) return;
+    const event=JSON.parse(raw) as AgentEvent;onEvent(event);
+    if (event.type==='error') throw new ApiError(event.message);
+    if (event.type==='done') done=true;
+  };
+  try {
+    while (true) {
+      const part=await reader.read();pending+=decoder.decode(part.value,{stream:!part.done});
+      const blocks=pending.split(/\r?\n\r?\n/);pending=blocks.pop() || '';blocks.forEach(accept);
+      if (part.done) { if(pending.trim()) accept(pending);break; }
+    }
+    if (!done) throw new ApiError('回复连接提前结束，已显示的内容与已执行操作保留；请检查步骤后继续');
+  } finally { await reader.cancel().catch(()=>{});reader.releaseLock(); }
+}
+
 export interface BrowserPlatform {
   id: string; name: string; group: string; enabled: boolean; state: SourceState; paused_reason: string;
   last_error: string; needs_login: boolean; verify_once: boolean; home: string;

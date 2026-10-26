@@ -25,7 +25,7 @@ const NAV: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "criteria", label: "方案条件", icon: SlidersHorizontal },
   { id: "sources", label: "信源与频率", icon: RadioTower },
   { id: "accounts", label: "账号与密钥", icon: KeyRound },
-  { id: "assistant", label: "指挥助手", icon: Sparkles },
+  { id: "assistant", label: "Agent", icon: Sparkles },
   { id: "usage", label: "AI 用量", icon: Coins },
   { id: "logs", label: "运行日志", icon: ScrollText },
 ];
